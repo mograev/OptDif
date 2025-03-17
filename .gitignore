@@ -1,3 +1,4 @@
 data/
-data/*
-.conda/*
+models/classifier/
+.conda/
+.vscode-server/
