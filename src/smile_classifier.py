@@ -83,4 +83,4 @@ if __name__ == "__main__":
 
     plt.title("Smile Classification Demo")
     plt.tight_layout()
-    plt.savefig("demo/results/smile_classification_test.png")
+    plt.savefig("demo/results/smile_classification.png")
