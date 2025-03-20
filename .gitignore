@@ -1,4 +1,12 @@
-data/
+data/ffhq/features/
+data/ffhq/images1024x1024/
+data/ffhq/pt_images/
+data/ffhq/ffhq-dataset-v2.json
 models/classifier/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
 .conda/
 .vscode-server/
+logs/
