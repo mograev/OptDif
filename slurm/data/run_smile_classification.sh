@@ -7,7 +7,7 @@
 #SBATCH --partition=single                # Partition to submit the job to
 #SBATCH --ntasks=1                        # Number of tasks (processes)
 #SBATCH --cpus-per-task=4                 # Number of CPU cores per task
-#SBATCH --mem=16G                         # Memory per node
+#SBATCH --mem=8G                         # Memory per node
 
 # Initialize conda
 eval "$(conda shell.bash hook)"

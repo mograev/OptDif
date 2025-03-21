@@ -55,7 +55,7 @@ class SmileClassifier:
         all_outputs = []
         for i in range(0, len(image_paths), batch_size):
             # Logging
-            print(f"Processing batch {i // batch_size + 1}/{len(image_paths) // batch_size + 1}")
+            print(f"Processing batch {i // batch_size + 1}/{len(image_paths) // batch_size + 1}", flush=True)
 
             # Get the current batch
             batch = image_paths[i : i + batch_size]
