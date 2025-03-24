@@ -7,7 +7,6 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
-
 class ModelWithTemperature(nn.Module):
     """
     A thin decorator, which wraps a model with temperature scaling
