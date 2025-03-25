@@ -1,18 +1,17 @@
-""" Code for various helper functions """
+""" Code for various helper functions and classes """
 import sys
 import gzip
 import pickle
-import functools
-import argparse
 import numpy as np
 from scipy import stats
 from tqdm.auto import tqdm
 import torch
+import torch.nn.functional as F
 import torchvision.transforms as transforms
 from PIL import Image
 import pytorch_lightning as pl
-import math
 from scipy.stats import multivariate_normal
+from diffusers import AutoencoderKL
 
 
 # Various pytorch functions
@@ -139,6 +138,10 @@ def load_image_predictor(img_path,
 
 class SubmissivePlProgressbar(pl.callbacks.ProgressBar):
     """ progress bar with tqdm set to leave """
+
+    def __init__(self, process_position: int):
+        super().__init__()
+        self.process_position = process_position
 
     def init_train_tqdm(self) -> tqdm:
         bar = tqdm(

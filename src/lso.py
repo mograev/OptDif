@@ -21,6 +21,7 @@ from diffusers import AutoencoderKL
 from src.dataloader.ffhq import FFHQWeightedTensorDataset, SimpleFilenameToTensorDataset
 from src.dataloader.weighting import DataWeighter
 from src.classification.smile_classifier import SmileClassifier
+from src.models.lit_vae import LitVAE
 from src.utils import SubmissivePlProgressbar
 from src import DNGO_TRAIN_FILE, DNGO_OPT_FILE
 
@@ -38,7 +39,7 @@ def add_wr_args(parser):
     wr_group.add_argument("--pretrained_model_path", type=str, default=None, help="path to pretrained model to use")
     wr_group.add_argument("--pretrained_predictor_path", type=str, default=None, help="path to pretrained predictor to use")
     wr_group.add_argument("--scaled_predictor_path", type=str, default=None, help="path to scaled predictor to use")
-    wr_group.add_argument("--attr_path", type=str, default=None, help="path to attribute file")
+    wr_group.add_argument("--predictor_attr_file", type=str, default=None, help="path to attribute file of the predictor")
     wr_group.add_argument("--n_retrain_epochs", type=float, default=1., help="number of epochs to retrain for")
     wr_group.add_argument("--n_init_retrain_epochs", type=float, default=None, help="None to use n_retrain_epochs, 0.0 to skip init retrain")
 
@@ -104,21 +105,24 @@ def retrain_vae(vae, datamodule, save_dir, version_str, num_epochs, device):
         limit_train_batches = 1.0
     else:
         raise ValueError(f"invalid num epochs {num_epochs}")
+    
+    # Create LitVAE module to allow for PL training
+    vae_module = LitVAE(vae)
+    
+    # Enable PyTorch anomaly detection
+    with torch.autograd.set_detect_anomaly(True):
+        # Create trainer
+        trainer = pl.Trainer(
+            accelerator="gpu" if device == "cuda" else "cpu",
+            max_epochs=max_epochs,
+            limit_train_batches=limit_train_batches,
+            limit_val_batches=1,
+            logger=tb_logger,
+            callbacks=[train_pbar, checkpointer],
+        )
 
-    # Create trainer, default batch size: 32
-    trainer = pl.Trainer(
-        gpus=1 if device == "cuda" else 0,
-        max_epochs=max_epochs,
-        limit_train_batches=limit_train_batches,
-        limit_val_batches=1,
-        checkpoint_callback=checkpointer,
-        terminate_on_nan=True,
-        logger=tb_logger,
-        callbacks=[train_pbar],
-    )
-
-    # Fit model
-    trainer.fit(vae, datamodule)
+        # Fit model
+        trainer.fit(vae_module, datamodule)
 
 
 def _choose_best_rand_points(args: argparse.Namespace, dataset):
@@ -341,12 +345,11 @@ def main_loop(args):
 
     # Load data
     datamodule = FFHQWeightedTensorDataset(args, DataWeighter(args))
-    datamodule.setup("split") # assignment into train/validation split is made and weights are set
+    datamodule.setup() # assignment into train/validation split is made and weights are set
 
     # Load pre-trained SD-VAE model
     if args.pretrained_model_path == "stabilityai/stable-diffusion-3.5-medium":
         vae = AutoencoderKL.from_pretrained("stabilityai/stable-diffusion-3.5-medium", subfolder="vae")
-        vae.beta = vae.hparams.beta_final
         vae.eval()
     else:
         raise NotImplementedError(args.pretrained_model_code)
@@ -354,7 +357,7 @@ def main_loop(args):
     # Load pretrained (temperature-scaled) predictor
     predictor = SmileClassifier(
         model_path=args.pretrained_predictor_path,
-        attr_file=args.attr_file,
+        attr_file=args.predictor_attr_file,
         scaled_model_path=args.scaled_predictor_path,
         device=args.device,
     )
