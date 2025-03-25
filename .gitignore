@@ -8,5 +8,6 @@ __pycache__/
 *.pyo
 *.pyd
 .conda/
+.vscode/
 .vscode-server/
 logs/
