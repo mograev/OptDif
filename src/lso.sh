@@ -11,7 +11,7 @@ train_attr_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/data/ffhq/ffhq_
 val_attr_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/data/ffhq/ffhq_smile_scores.json"
 combined_attr_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/data/ffhq/ffhq_smile_scores.json"
 max_property_value=5
-min_property_value=0
+min_property_value=4 #0
 mode="all"
 batch_size=128
 num_workers=4
@@ -25,7 +25,7 @@ query_budget=500
 retraining_frequency=5
 n_retrain_epochs=0.1
 n_init_retrain_epochs=1
-result_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/results/"
+result_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/results/debug_00/"
 predictor_attr_file="/home/ma/ma_ma/ma_mgraevin/pfs5wor7/ma_mgraevin-optdif/models/classifier/celeba_smile/attributes.json"
 pretrained_model_path="stabilityai/stable-diffusion-3.5-medium"
 pretrained_predictor_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/models/classifier/celeba_smile/predictor_128.pth.tar"
@@ -34,6 +34,8 @@ pretrained_predictor_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/model
 n_out=5
 n_starts=20
 n_samples=10000
+n_rand_points=60  #8000
+n_best_points=20 #2000
 sample_distribution="normal"
 opt_method="SLSQP"
 opt_constraint_threshold=-94
@@ -62,12 +64,14 @@ python /home/ma/ma_ma/ma_mgraevin/pfs5wor7/ma_mgraevin-optdif/src/lso.py \
     --n_retrain_epochs $n_retrain_epochs \
     --n_init_retrain_epochs $n_init_retrain_epochs \
     --result_path $result_path \
-    --attr_path $attr_path \
+    --predictor_attr_file $predictor_attr_file \
     --pretrained_model_path $pretrained_model_path \
     --pretrained_predictor_path $pretrained_predictor_path \
     --n_out $n_out \
     --n_starts $n_starts \
     --n_samples $n_samples \
+    --n_rand_points $n_rand_points \
+    --n_best_points $n_best_points \
     --sample_distribution $sample_distribution \
     --opt_method $opt_method \
     --opt_constraint_threshold $opt_constraint_threshold \

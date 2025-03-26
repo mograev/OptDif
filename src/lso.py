@@ -9,8 +9,10 @@ import subprocess
 import time
 from tqdm.auto import tqdm
 import json
+import pickle
 
 import torch
+from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 import numpy as np
 
@@ -53,6 +55,8 @@ def add_dngo_args(parser):
     bo_group.add_argument("--n_out", type=int, default=5)
     bo_group.add_argument("--n_starts", type=int, default=20, help="Number of optimization runs with different initial values")
     bo_group.add_argument("--n_samples", type=int, default=10000)
+    bo_group.add_argument("--n_rand_points", type=int, default=8000)
+    bo_group.add_argument("--n_best_points", type=int, default=2000)
     bo_group.add_argument("--sample_distribution", type=str, default="normal")
     bo_group.add_argument("--opt_method", type=str, default="SLSQP")
     bo_group.add_argument("--opt_constraint_threshold", type=float, default=None, help="Threshold for optimization constraint")
@@ -130,9 +134,11 @@ def _choose_best_rand_points(args: argparse.Namespace, dataset):
     chosen_point_set = set()
 
     # Best scores at start
-    targets_argsort = np.argsort(-dataset.prop_train.flatten())
+    targets_argsort = np.argsort(-dataset.attr_train.flatten())
     for i in range(args.n_best_points):
         chosen_point_set.add(targets_argsort[i])
+
+    # Random points
     candidate_rand_points = np.random.choice(
         len(targets_argsort),
         size=args.n_rand_points + args.n_best_points,
@@ -149,25 +155,37 @@ def _choose_best_rand_points(args: argparse.Namespace, dataset):
     return chosen_points
 
 
-def _encode_images(vae, datamodule, device):
+def _encode_images(vae, dataset, device):
     """ Helper function to encode images into VAE latent space """
     z_encode = []
     batch_size = 128
 
-    dataloader = datamodule.train_dataloader()
+    dataloader = DataLoader(
+        dataset,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers
+    )
+
+    # Move VAE to the correct device
+    vae = vae.to(device)
 
     with torch.no_grad():
         for image_tensor_batch in dataloader:
             # Move images to the correct device
-            images = image_tensor_batch[0].to(device)
+            images = image_tensor_batch.to(device)
             
             # Encode images into latent space
             latent_dist = vae.encode(images).latent_dist
             latents = latent_dist.mean  # Use the mean of the latent distribution
             z_encode.append(latents.cpu().numpy())
 
+    # Free up GPU memory
+    vae = vae.cpu()
+    torch.cuda.empty_cache()
+
     # Aggregate array
     z_encode = np.concatenate(z_encode, axis=0)
+
     return z_encode
 
 def _batch_decode_z_and_props(vae, predictor, z, device, get_props=True):
@@ -225,18 +243,13 @@ def latent_optimization(args, vae, predictor, datamodule, num_queries_to_do, bo_
     # First, choose BO points to train!
     chosen_indices = _choose_best_rand_points(args, datamodule)
 
+    # Create a new dataset with only the chosen points
     data = [datamodule.data_train[i] for i in chosen_indices]
-    temp_dataset = SimpleFilenameToTensorDataset(data, args.tensor_dir)
-
+    temp_dataset = SimpleFilenameToTensorDataset(data, args.pt_dir)
     targets = datamodule.attr_train[chosen_indices]
 
     # Next, encode the data to latent space
-    vae = vae.to(device)
-    latent_points = _encode_images(vae, temp_dataset)
-
-    # Free up GPU memory
-    vae = vae.cpu()
-    torch.cuda.empty_cache()
+    latent_points = _encode_images(vae, temp_dataset, device)
 
     # Save points to file
     def _save_bo_data(latent_points, targets):
@@ -303,8 +316,6 @@ def latent_optimization(args, vae, predictor, datamodule, num_queries_to_do, bo_
         f"--n_samples={str(args.n_samples)}",
         f"--opt_method={args.opt_method}",
         f"--sparse_out={args.sparse_out}",
-        f"--opt_method={args.opt_method}",
-        f"--pretrained_model_type={args.pretrained_model_type}",
         f"--opt_constraint_threshold={args.opt_constraint_threshold}",
         f"--opt_constraint_strategy={args.opt_constraint_strategy}",
         f"--n_gmm_components={args.n_gmm_components}",
@@ -342,18 +353,18 @@ def main_loop(args):
 
     # Seeding
     pl.seed_everything(args.seed)
-
+    
     # Load data
     datamodule = FFHQWeightedTensorDataset(args, DataWeighter(args))
     datamodule.setup() # assignment into train/validation split is made and weights are set
-
+    
     # Load pre-trained SD-VAE model
     if args.pretrained_model_path == "stabilityai/stable-diffusion-3.5-medium":
         vae = AutoencoderKL.from_pretrained("stabilityai/stable-diffusion-3.5-medium", subfolder="vae")
         vae.eval()
     else:
         raise NotImplementedError(args.pretrained_model_code)
-
+    
     # Load pretrained (temperature-scaled) predictor
     predictor = SmileClassifier(
         model_path=args.pretrained_predictor_path,
@@ -361,7 +372,7 @@ def main_loop(args):
         scaled_model_path=args.scaled_predictor_path,
         device=args.device,
     )
-
+    
     # Set up results tracking
     results = dict(
         opt_points=[],  # saves (default: 5) optimal points in the original input space for each retraining iteration
@@ -385,6 +396,7 @@ def main_loop(args):
         # Make result directory
         result_dir = Path(args.result_path).resolve()
         result_dir.mkdir(parents=True)
+        # Create subdirectories
         data_dir = result_dir / "data"
         data_dir.mkdir()
         setup_logger(result_dir / "log.txt")
@@ -470,7 +482,6 @@ def main_loop(args):
 
 
 if __name__ == "__main__":
-
     # arguments and argument checking
     parser = argparse.ArgumentParser()
     parser = add_wr_args(parser)

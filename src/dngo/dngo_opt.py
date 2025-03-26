@@ -21,7 +21,7 @@ parser = argparse.ArgumentParser()
 dngo_opt_group = parser.add_argument_group("DNGO optimization")
 dngo_opt_group.add_argument("--logfile", type=str, help="file to log to", default="dngo_opt.log")
 dngo_opt_group.add_argument("--seed", type=int, required=True)
-dngo_opt_group.add_argument("--surrogate_path", type=str, required=True, help="path to load pretrained surrogate model from")
+dngo_opt_group.add_argument("--surrogate_file", type=str, required=True, help="path to load pretrained surrogate model from")
 dngo_opt_group.add_argument("--data_file", type=str, help="file to load data from", required=True)
 dngo_opt_group.add_argument("--save_file", type=str, required=True, help="file to save results to")
 dngo_opt_group.add_argument("--n_out", type=int, default=5, help="number of optimization points to return")
@@ -277,33 +277,21 @@ def robust_multi_restart_optimizer(
 def gp_opt(args):
     """ Main function to perform Bayesian optimization with DNGO """
 
-    # Load arguments
-    surrogate_path = args.surrogate_path
-    data_path = args.data_path
-    save_path = args.save_path
-    logfile = args.logfile
-    n_samples = args.n_samples
-    sample_distribution = args.sample_distribution
-    num_pts_to_return = args.n_out
-    num_starts = args.n_starts
+    # Load method
     method = args.opt_method
-    opt_constraint_threshold = args.opt_constraint_threshold
-    opt_constraint_strategy = args.opt_constraint_strategy
-    n_gmm_components = args.n_gmm_components
-    sparse_out = args.sparse_out
 
     # Set up logger
     LOGGER = logging.getLogger()
     LOGGER.setLevel(logging.INFO)
-    LOGGER.addHandler(logging.FileHandler(logfile))
+    LOGGER.addHandler(logging.FileHandler(args.logfile))
 
     # Load the data
-    with np.load(data_path, allow_pickle=True) as npz:
+    with np.load(args.data_path, allow_pickle=True) as npz:
         X_train = npz['X_train'].astype(np.float32)
         y_train = npz['y_train'].astype(np.float32)
 
     # Load pretrained DNGO
-    with open(surrogate_path, 'rb') as inp:
+    with open(args.surrogate_file, 'rb') as inp:
         surrogate = pickle.load(inp)
 
     # Choose a value for fmin.
@@ -327,32 +315,32 @@ def gp_opt(args):
             functools.partial(neg_ei_and_grad, surrogate=surrogate, fmin=fmin),
             X_train,
             method,
-            num_pts_to_return=num_pts_to_return,
-            num_starts=num_starts,
+            num_pts_to_return=args.n_out,
+            num_starts=args.n_starts,
             opt_bounds=opt_bounds,
-            n_samples=n_samples,
-            sample_distribution=sample_distribution,
+            n_samples=args.n_samples,
+            sample_distribution=args.sample_distribution,
             logger=LOGGER,
-            opt_constraint_threshold=opt_constraint_threshold,
-            opt_constraint_strategy=opt_constraint_strategy,
-            n_gmm_components=n_gmm_components,
-            sparse_out=sparse_out
+            opt_constraint_threshold=args.opt_constraint_threshold,
+            opt_constraint_strategy=args.opt_constraint_strategy,
+            n_gmm_components=args.n_gmm_components,
+            sparse_out=args.sparse_out
         )
     elif method == "COBYLA" or method=="SLSQP":
         latent_pred, ei_vals = robust_multi_restart_optimizer(
             functools.partial(neg_ei, surrogate=surrogate, fmin=fmin),
             X_train,
             method,
-            num_pts_to_return=num_pts_to_return,
-            num_starts=num_starts,
+            num_pts_to_return=args.n_out,
+            num_starts=args.n_starts,
             opt_bounds=opt_bounds,
-            n_samples=n_samples,
-            sample_distribution=sample_distribution,
+            n_samples=args.n_samples,
+            sample_distribution=args.sample_distribution,
             logger=LOGGER,
-            opt_constraint_threshold=opt_constraint_threshold,
-            opt_constraint_strategy=opt_constraint_strategy,
-            n_gmm_components=n_gmm_components,
-            sparse_out=sparse_out
+            opt_constraint_threshold=args.opt_constraint_threshold,
+            opt_constraint_strategy=args.opt_constraint_strategy,
+            n_gmm_components=args.n_gmm_components,
+            sparse_out=args.sparse_out
         )
     else:
         raise NotImplementedError(method)
@@ -361,7 +349,7 @@ def gp_opt(args):
 
     # Save results
     latent_pred = np.array(latent_pred, dtype=np.float32)
-    np.save(save_path, latent_pred)
+    np.save(args.save_path, latent_pred)
 
     # Make some gp predictions in the log file
     LOGGER.info("EI results:")

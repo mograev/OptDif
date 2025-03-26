@@ -26,20 +26,17 @@ class FFHQ(Dataset):
         # Load the attribute JSON file
         with open(self.attr_path, 'r') as f:
             attr_dict = json.load(f)
-
+            
         # Fill dataset with sorted filenames and attribute data
         for key in sorted(attr_dict.keys()):
             filename = key.split('.')[0]
             if attr_dict[key] <= self.max_property_value and attr_dict[key] >= self.min_property_value:
                 self.dataset.append([filename, attr_dict[key]])
-
+        
         # Set the number of images
         self.num_images = len(self.dataset)
 
-        # Check if all images have corresponding .pt files
-        if not all([os.path.exists(f"{self.pt_dir}/{filename}.pt") for filename, _ in self.dataset]):
-            do_preprocess = True
-
+        # Preprocess the dataset if necessary
         if do_preprocess:
             self._preprocess()
 
@@ -127,8 +124,8 @@ class FFHQWeightedTensorDataset(pl.LightningDataModule):
         data_group.add_argument("--train_attr_path", type=str, required=True)
         data_group.add_argument("--val_attr_path", type=str, required=True)
         data_group.add_argument("--combined_attr_path", type=str, required=True)
-        data_group.add_argument("--max_property_value", type=int, default=5)
-        data_group.add_argument("--min_property_value", type=int, default=0)
+        data_group.add_argument("--max_property_value", type=float, default=5.)
+        data_group.add_argument("--min_property_value", type=float, default=0.)
         data_group.add_argument("--mode", type=str, default="split", choices=["split", "all"])
         data_group.add_argument("--batch_size", type=int, default=128)
         data_group.add_argument("--num_workers", type=int, default=4)
@@ -157,7 +154,6 @@ class FFHQWeightedTensorDataset(pl.LightningDataModule):
         elif self.mode == "all":
             # Load combined dataset
             self.combined_dataset = FFHQ(self.img_dir, self.pt_dir, self.combined_attr_path, self.max_property_value, self.min_property_value)
-
             # Convert dataset to numpy array
             combined_dataset_as_numpy = np.array(self.combined_dataset.dataset)
             self.data_train = combined_dataset_as_numpy[:, 0].tolist()
@@ -227,24 +223,13 @@ class SimpleFilenameToTensorDataset(Dataset):
         filename = self.filename_list[index]
 
         # Check if filename is from original training data or sampled
-        is_orig_training_data = True
         try:
-            int(filename.split('.')[0])
+            image = torch.load(f"{self.pt_dir}/{filename}.pt")
         except:
-            is_orig_training_data = False
-
-        if is_orig_training_data:
-            # Get the image index
-            filename_idx = int(filename.split('.')[0])
-            
-            # Load image
-            image = torch.load(f"{self.pt_dir}/{filename}.pt").unsqueeze(0)
-        else:
-            # Load image
-            image = torch.load(filename).unsqueeze(0)
+            image = torch.load(filename)
 
         # Return image tensor
-        return tuple(image)
+        return image
 
     def __len__(self):
         return len(self.filename_list)
