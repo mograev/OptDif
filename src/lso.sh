@@ -39,8 +39,8 @@ n_best_points=20 #2000
 sample_distribution="normal"
 opt_method="SLSQP"
 opt_constraint_threshold=-94
-opt_constraint_strategy="gmm_fit"
-n_gmm_components=10
+#opt_constraint_strategy="gmm_fit"
+#n_gmm_components=1 #10
 sparse_out=True
 
 # Run the Python script with specified arguments
@@ -75,7 +75,5 @@ python /home/ma/ma_ma/ma_mgraevin/pfs5wor7/ma_mgraevin-optdif/src/lso.py \
     --sample_distribution $sample_distribution \
     --opt_method $opt_method \
     --opt_constraint_threshold $opt_constraint_threshold \
-    --opt_constraint_strategy $opt_constraint_strategy \
-    --n_gmm_components $n_gmm_components \
     --sparse_out $sparse_out \
     "$@"

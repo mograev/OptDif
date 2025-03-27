@@ -45,7 +45,7 @@ class FFHQ(Dataset):
         """Preprocess the FFHQ dataset."""
 
         print("Preprocessing the FFHQ dataset...")
-
+        
         # Define preprocessing transformations
         transform = transforms.Compose([
             transforms.Resize((256, 256)),  # Resize to 256x256

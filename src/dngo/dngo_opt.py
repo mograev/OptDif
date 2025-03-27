@@ -114,20 +114,22 @@ def robust_multi_restart_optimizer(
         method="SLSQP",
         num_pts_to_return=5,
         num_starts=20,
-        use_tqdm=False,
+        use_tqdm=True, #False
         opt_bounds=3.,
         return_res=False,
         logger=None,
         n_samples=10000,
         sample_distribution="normal",
         opt_constraint_threshold=None,
-        opt_constraint_strategy="gmm_fit",
+        opt_constraint_strategy=None,#"gmm_fit",
         n_gmm_components=None,
         sparse_out=True
         ):
     """
     Wrapper that calls scipy's optimize function at many different start points.
     """
+
+    logger.info(f"X_train shape: {X_train.shape}")
 
     # Wrapper for tensorflow functions, that handles array flattening and dtype changing
     def objective1d(v):
@@ -145,6 +147,7 @@ def robust_multi_restart_optimizer(
         raise NotImplementedError(sample_distribution)
 
     # debugging
+    logger.info(f"latent_grid shape: {latent_grid.shape}")
     logger.info(f"Sampled points. Now fitting GMM to the latent grid.")
 
     if opt_constraint_threshold is None:
@@ -158,16 +161,20 @@ def robust_multi_restart_optimizer(
                             "'gmm_fit' is used as optimization constraint strategy.")
         # Fit GMM to the latent grid
         gmm = GaussianMixture(n_components=n_gmm_components, random_state=0, covariance_type="full", max_iter=2000, tol=1e-3).fit(X_train)
+        logger.info(f"GMM fitted with {n_gmm_components} components. Now scoring the latent grid.")
         logdens_z_grid = gmm.score_samples(latent_grid)
+        logger.info(f"logdens_z_grid shape: {logdens_z_grid.shape}")
+        logger.info(f"logdens_z_grid: {logdens_z_grid}")
 
         # Filter out points that are below the threshold
         z_valid = np.array([z for i, z in enumerate(latent_grid) if logdens_z_grid[i] > opt_constraint_threshold],
                             dtype=np.float32)
+        logger.info(f"z_valid shape: {z_valid.shape}")
     else:
         raise NotImplementedError(opt_constraint_strategy)
     
     # debugging
-    logger.info(f"Finished GMM fitting. Number of valid points: {z_valid.shape[0]}")
+    logger.info(f"Finished GMM scoring. Now starting optimization.")
         
     # Sort the valid points by acquisition function
     if method == "L-BFGS-B":
@@ -175,6 +182,7 @@ def robust_multi_restart_optimizer(
         z_valid_prop_argsort = np.argsort(z_valid_acq.reshape(1,-1))[0]  # assuming minimization of property
     elif method == "COBYLA" or method == "SLSQP":
         z_valid_acq = func_with_grad(z_valid)
+        logger.info(f"z_valid_acq shape: {z_valid_acq.shape}")
         z_valid_prop_argsort = np.argsort(z_valid_acq.numpy().reshape(1,-1))[0]  # assuming minimization of property
     else:
         raise NotImplementedError(method)
