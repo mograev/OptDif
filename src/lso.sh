@@ -32,8 +32,8 @@ pretrained_predictor_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/model
 
 # DNGO
 n_out=5
-n_starts=20
-n_samples=10000
+n_starts=2 #20
+n_samples=10 #10000
 n_rand_points=60  #8000
 n_best_points=20 #2000
 sample_distribution="normal"

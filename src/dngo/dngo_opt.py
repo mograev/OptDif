@@ -144,6 +144,9 @@ def robust_multi_restart_optimizer(
     else:
         raise NotImplementedError(sample_distribution)
 
+    # debugging
+    logger.info(f"Sampled points. Now fitting GMM to the latent grid.")
+
     if opt_constraint_threshold is None:
         z_valid = latent_grid
     elif opt_constraint_strategy == "gmm_fit":
@@ -162,6 +165,9 @@ def robust_multi_restart_optimizer(
                             dtype=np.float32)
     else:
         raise NotImplementedError(opt_constraint_strategy)
+    
+    # debugging
+    logger.info(f"Finished GMM fitting. Number of valid points: {z_valid.shape[0]}")
         
     # Sort the valid points by acquisition function
     if method == "L-BFGS-B":
@@ -225,6 +231,9 @@ def robust_multi_restart_optimizer(
                     f"success={res.success}, msg={str(res.message)}, x={res.x}, x0={z_valid_sorted[i]}")
         
         elif method == "SLSQP":
+            # debugging
+            logger.info(f"Starting optimization at point {z_valid_sorted[i]}")
+            
             if opt_constraint_threshold is None:
                 res = minimize(
                     fun=objective1d, x0=z_valid_sorted[i],
@@ -274,7 +283,7 @@ def robust_multi_restart_optimizer(
     return x_candidates[:num_pts_to_return], opt_vals_candidates[:num_pts_to_return]
 
 
-def gp_opt(args):
+def dngo_opt(args):
     """ Main function to perform Bayesian optimization with DNGO """
 
     # Load method
@@ -286,9 +295,15 @@ def gp_opt(args):
     LOGGER.addHandler(logging.FileHandler(args.logfile))
 
     # Load the data
-    with np.load(args.data_path, allow_pickle=True) as npz:
+    with np.load(args.data_file, allow_pickle=True) as npz:
         X_train = npz['X_train'].astype(np.float32)
         y_train = npz['y_train'].astype(np.float32)
+
+    # Reshape the data
+    X_train = X_train.reshape(X_train.shape[0], -1)
+    LOGGER.info(f"X_train shape: {X_train.shape}")
+    y_train = y_train.reshape(y_train.shape[0])
+    LOGGER.info(f"y_train shape: {y_train.shape}")
 
     # Load pretrained DNGO
     with open(args.surrogate_file, 'rb') as inp:
@@ -349,7 +364,7 @@ def gp_opt(args):
 
     # Save results
     latent_pred = np.array(latent_pred, dtype=np.float32)
-    np.save(args.save_path, latent_pred)
+    np.save(args.save_file, latent_pred)
 
     # Make some gp predictions in the log file
     LOGGER.info("EI results:")
@@ -369,4 +384,4 @@ def gp_opt(args):
 if __name__ == "__main__":
     args = parser.parse_args()
     pl.seed_everything(args.seed)
-    gp_opt(args)
+    dngo_opt(args)

@@ -158,7 +158,6 @@ def _choose_best_rand_points(args: argparse.Namespace, dataset):
 def _encode_images(vae, dataset, device):
     """ Helper function to encode images into VAE latent space """
     z_encode = []
-    batch_size = 128
 
     dataloader = DataLoader(
         dataset,
@@ -259,7 +258,7 @@ def latent_optimization(args, vae, predictor, datamodule, num_queries_to_do, bo_
 
         # Save the file
         np.savez_compressed(
-        bo_data_file,
+            bo_data_file,
             X_train=latent_points.astype(np.float64),
             X_test=[],
             y_train=targets.astype(np.float64),
