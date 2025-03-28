@@ -5,7 +5,6 @@ import logging
 import functools
 import pickle
 import time
-from tqdm import tqdm
 
 import numpy as np
 from scipy.optimize import minimize
@@ -27,8 +26,8 @@ dngo_opt_group.add_argument("--save_file", type=str, required=True, help="file t
 dngo_opt_group.add_argument("--n_out", type=int, default=5, help="number of optimization points to return")
 dngo_opt_group.add_argument("--n_starts", type=int, default=20, help="number of optimization runs with different initial values")
 dngo_opt_group.add_argument("--n_samples", type=int, default=10000, help="Number of grid points")
-dngo_opt_group.add_argument("--opt_constraint_threshold", type=float, default=None, help="Log-density threshold for optimization constraint")
 dngo_opt_group.add_argument("--sample_distribution", type=str, default="normal", help="Distribution which the samples are drawn from.")
+dngo_opt_group.add_argument("--opt_constraint_threshold", type=float, default=None, help="Log-density threshold for optimization constraint")
 dngo_opt_group.add_argument("--opt_constraint_strategy", type=str, default="gmm_fit")
 dngo_opt_group.add_argument("--n_gmm_components", type=int, default=None, help="Number of components used for GMM fitting")
 dngo_opt_group.add_argument("--sparse_out", type=bool, default=True)
@@ -64,14 +63,15 @@ def neg_ei(x, surrogate, fmin, check_type=True):
             mu_temp, var_temp = surrogate.predict(x[idx*batch_size : idx*batch_size + batch_size].numpy())
             mu[idx*batch_size : idx*batch_size + batch_size] = mu_temp.astype(np.float32)
             var[idx*batch_size : idx*batch_size + batch_size] = var_temp.astype(np.float32)
-    mu = mu.astype(np.float32)
-    var = var.astype(np.float32)
+
+    # Convert mu and var to tensors
+    mu = torch.tensor(mu, dtype=torch.float32)
+    var = torch.tensor(var, dtype=torch.float32)
 
     # Calculate EI
-    sigma = torch.sqrt(torch.tensor(var))
+    sigma = torch.sqrt(var)
     z = (fmin - mu) / sigma
-    ei = ((fmin - mu) * std_normal.cdf(z) +
-          sigma * std_normal.prob(z))
+    ei = (fmin - mu) * std_normal.cdf(z) + sigma * torch.exp(std_normal.log_prob(z))
     return -ei
 
 
@@ -114,14 +114,13 @@ def robust_multi_restart_optimizer(
         method="SLSQP",
         num_pts_to_return=5,
         num_starts=20,
-        use_tqdm=True, #False
         opt_bounds=3.,
         return_res=False,
         logger=None,
         n_samples=10000,
         sample_distribution="normal",
         opt_constraint_threshold=None,
-        opt_constraint_strategy=None,#"gmm_fit",
+        opt_constraint_strategy="gmm_fit",
         n_gmm_components=None,
         sparse_out=True
         ):
@@ -150,6 +149,7 @@ def robust_multi_restart_optimizer(
     logger.info(f"latent_grid shape: {latent_grid.shape}")
     logger.info(f"Sampled points. Now fitting GMM to the latent grid.")
 
+    # Filter out points that are below the GMM threshold if specified
     if opt_constraint_threshold is None:
         z_valid = latent_grid
     elif opt_constraint_strategy == "gmm_fit":
@@ -164,7 +164,6 @@ def robust_multi_restart_optimizer(
         logger.info(f"GMM fitted with {n_gmm_components} components. Now scoring the latent grid.")
         logdens_z_grid = gmm.score_samples(latent_grid)
         logger.info(f"logdens_z_grid shape: {logdens_z_grid.shape}")
-        logger.info(f"logdens_z_grid: {logdens_z_grid}")
 
         # Filter out points that are below the threshold
         z_valid = np.array([z for i, z in enumerate(latent_grid) if logdens_z_grid[i] > opt_constraint_threshold],
@@ -192,8 +191,6 @@ def robust_multi_restart_optimizer(
     # Main optimization loop
     start_time = time.time()
     num_good_results = 0
-    if use_tqdm:
-        z_valid_sorted = tqdm(z_valid_sorted)
     opt_results = []
     i = 0
     while (num_good_results < num_starts) and (i < z_valid_sorted.shape[0]):
@@ -247,7 +244,7 @@ def robust_multi_restart_optimizer(
                     fun=objective1d, x0=z_valid_sorted[i],
                     method=method,
                     bounds=[(-opt_bounds, opt_bounds) for _ in range(X_train.shape[1])],
-                    options={'maxiter': 1000, 'eps': 1e-5})
+                    options={'maxiter': 10, 'eps': 1e-5, 'disp': True}) #1000
 
             else:
                 res = minimize(

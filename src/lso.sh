@@ -1,7 +1,7 @@
 # Script to run the LSO algorithm on the FFHQ dataset
 
 # Device and seed
-device="cpu"
+device="cuda"
 seed=42
 
 # Dataloader
@@ -29,6 +29,7 @@ result_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/results/debug_00/"
 predictor_attr_file="/home/ma/ma_ma/ma_mgraevin/pfs5wor7/ma_mgraevin-optdif/models/classifier/celeba_smile/attributes.json"
 pretrained_model_path="stabilityai/stable-diffusion-3.5-medium"
 pretrained_predictor_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/models/classifier/celeba_smile/predictor_128.pth.tar"
+scaled_predictor_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/models/classifier/celeba_smile/predictor_128_scaled3.pth.tar"
 
 # DNGO
 n_out=5
@@ -38,10 +39,16 @@ n_rand_points=60  #8000
 n_best_points=20 #2000
 sample_distribution="normal"
 opt_method="SLSQP"
-opt_constraint_threshold=-94
-#opt_constraint_strategy="gmm_fit"
-#n_gmm_components=1 #10
+# opt_constraint_threshold=-94
+# opt_constraint_strategy="gmm_fit"
+# n_gmm_components=1 #10
 sparse_out=True
+
+# Initialize Conda for the current shell
+eval "$(conda shell.bash hook)"
+
+# Activate the conda environment
+conda activate optdif1
 
 # Run the Python script with specified arguments
 python /home/ma/ma_ma/ma_mgraevin/pfs5wor7/ma_mgraevin-optdif/src/lso.py \
@@ -67,6 +74,7 @@ python /home/ma/ma_ma/ma_mgraevin/pfs5wor7/ma_mgraevin-optdif/src/lso.py \
     --predictor_attr_file $predictor_attr_file \
     --pretrained_model_path $pretrained_model_path \
     --pretrained_predictor_path $pretrained_predictor_path \
+    --scaled_predictor_path $scaled_predictor_path \
     --n_out $n_out \
     --n_starts $n_starts \
     --n_samples $n_samples \
@@ -74,6 +82,5 @@ python /home/ma/ma_ma/ma_mgraevin/pfs5wor7/ma_mgraevin-optdif/src/lso.py \
     --n_best_points $n_best_points \
     --sample_distribution $sample_distribution \
     --opt_method $opt_method \
-    --opt_constraint_threshold $opt_constraint_threshold \
     --sparse_out $sparse_out \
     "$@"

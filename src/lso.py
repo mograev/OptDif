@@ -249,7 +249,7 @@ def latent_optimization(args, vae, predictor, datamodule, num_queries_to_do, bo_
 
     # Next, encode the data to latent space
     latent_points = _encode_images(vae, temp_dataset, device)
-    logger.info(latent_points.shape)
+    logger.debug(latent_points.shape)
 
     # Save points to file
     def _save_bo_data(latent_points, targets):
@@ -315,12 +315,12 @@ def latent_optimization(args, vae, predictor, datamodule, num_queries_to_do, bo_
         f"--n_starts={args.n_starts}",
         f"--n_samples={str(args.n_samples)}",
         f"--opt_method={args.opt_method}",
-        f"--sparse_out={args.sparse_out}",
-        f"--opt_constraint_threshold={args.opt_constraint_threshold}",
-        f"--opt_constraint_strategy={args.opt_constraint_strategy}"
+        f"--sparse_out={args.sparse_out}"
     ]
 
-    if args.n_gmm_components is not None:
+    if args.opt_constraint_threshold is not None:
+        dngo_opt_command.append(f"--opt_constraint_threshold={args.opt_constraint_threshold}")
+        dngo_opt_command.append(f"--opt_constraint_strategy={args.opt_constraint_strategy}")
         dngo_opt_command.append(f"--n_gmm_components={args.n_gmm_components}")
 
     if pbar is not None:

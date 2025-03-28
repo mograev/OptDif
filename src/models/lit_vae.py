@@ -1,12 +1,6 @@
-import argparse
-
-import torch
-import pytorch_lightning as pl
-
 import torch
 import torch.nn.functional as F
 import pytorch_lightning as pl
-from diffusers import AutoencoderKL
 
 
 class LitVAE(pl.LightningModule):
