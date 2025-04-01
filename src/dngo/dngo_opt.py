@@ -236,15 +236,12 @@ def robust_multi_restart_optimizer(
                     f"success={res.success}, msg={str(res.message)}, x={res.x}, x0={z_valid_sorted[i]}")
         
         elif method == "SLSQP":
-            # debugging
-            logger.info(f"Starting optimization at point {z_valid_sorted[i]}")
-            
             if opt_constraint_threshold is None:
                 res = minimize(
                     fun=objective1d, x0=z_valid_sorted[i],
                     method=method,
                     bounds=[(-opt_bounds, opt_bounds) for _ in range(X_train.shape[1])],
-                    options={'maxiter': 10, 'eps': 1e-5, 'disp': True}) #1000
+                    options={'maxiter': 1000, 'eps': 1e-5})
 
             else:
                 res = minimize(

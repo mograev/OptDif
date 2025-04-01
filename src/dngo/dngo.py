@@ -355,7 +355,6 @@ class DNGO(BaseModel):
             X_ = X_test
 
         # Get features from the net
-
         theta = self.network.basis_funcs(torch.Tensor(X_)).data.numpy()
 
         # Marginalise predictions over hyperparameters of the BLR

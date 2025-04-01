@@ -5,7 +5,7 @@ import torch.nn.functional as F
 from torch import nn, einsum
 from einops import rearrange, repeat
 
-from models.modules.utils import checkpoint
+from src.models.modules.utils import checkpoint
 
 
 def exists(val):

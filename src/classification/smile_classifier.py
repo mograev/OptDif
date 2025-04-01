@@ -61,19 +61,18 @@ class SmileClassifier:
         self.device = device
         self.logger.debug(f"Using device: {device}")
 
-        # Load model checkpoint
-        self.logger.debug(f"Loading model from {model_path}")
-        checkpoint = torch.load(model_path, map_location=torch.device(self.device))
-        self.model.load_state_dict(checkpoint["state_dict"], strict=True)
-        self.model.eval()  # Set to evaluation mode
-
         # Load temperature scaling
         if scaled_model_path:
             self.logger.debug(f"Loading scaled model from {scaled_model_path}")
-            self.checkpoint_scaled_model = torch.load(scaled_model_path, map_location=torch.device(device))
-            self.model=ModelWithTemperature(self.model)
-            self.model.load_state_dict(self.checkpoint_scaled_model, strict=True)
-            self.model.eval()
+            checkpoint = torch.load(scaled_model_path, map_location=torch.device(device))
+            self.model = ModelWithTemperature(self.model)
+            self.model.load_state_dict(checkpoint, strict=True)
+        else:
+            self.logger.debug(f"Loading model from {model_path}")
+            checkpoint = torch.load(model_path, map_location=torch.device(self.device))
+            self.model.load_state_dict(checkpoint["state_dict"], strict=True)
+        self.model.eval()
+        self.model.to(self.device)
 
         # Load attribute mapping from JSON file
         self.logger.debug(f"Loading attribute mapping from {attr_file}")
@@ -85,9 +84,9 @@ class SmileClassifier:
         self.smile_classes = np.array(self.smile_classes)
 
 
-    def classify(self, tensor_paths, batch_size=128, return_prob=False):
+    def classify_from_path(self, tensor_paths, batch_size=128, return_prob=False):
         """
-        Classify a single image or a batch of images
+        Classify a single image or a batch of images from file paths.
         """
 
         # Ensure image_paths is a list
@@ -155,6 +154,32 @@ class SmileClassifier:
         return all_outputs[0] if len(tensor_paths) == 1 else all_outputs
 
 
+    def classify_from_tensor(self, images, batch_size=128, return_prob=False):
+        # Split input into smaller batches
+        outputs = []
+        for start_idx in range(0, len(images), batch_size):
+            batch = images[start_idx : start_idx + batch_size]
+            # Resize as needed
+            resized = torch.nn.functional.interpolate(
+                batch, size=(224, 224), mode="bilinear", align_corners=False, antialias=True
+            ).to(self.device)
+
+            # Forward pass
+            with torch.no_grad():
+                preds = self.model(resized)
+
+            # Process outputs
+            if isinstance(preds, list):
+                preds = torch.stack(preds, dim=0)
+            probs = torch.nn.functional.softmax(preds, dim=2).cpu().numpy()
+            scores = probs[SMILE_ATTR_IDX_NEW] @ self.smile_classes
+
+            outputs.extend(probs[SMILE_ATTR_IDX_NEW].tolist() if return_prob else scores.tolist())
+
+        # Return single result if only one input
+        return outputs[0] if len(images) == 1 else np.array(outputs)
+
+
     def __call__(self, *args, **kwds):
         # If called, run classification
-        return self.classify(*args, **kwds)
+        return self.classify_from_tensor(*args, **kwds)

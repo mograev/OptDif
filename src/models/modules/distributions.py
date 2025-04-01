@@ -3,8 +3,19 @@ import numpy as np
 
 
 class DiagonalGaussianDistribution(object):
+    """
+    Diagonal Gaussian distribution with mean and variance.
+    This class is used to represent a Gaussian distribution with diagonal covariance.
+    It is used in the VAE model to represent the posterior distribution of the latent variables.
+    It can work with the following dimensions:
+    - (B, C, H, W) for 2D images or latents
+    - (B, L) for flattened latents
+    """
+
     def __init__(self, parameters, deterministic=False):
         self.parameters = parameters
+        # Check whether the parameters are 2D or 4D
+        self.dims = [1, 2, 3] if len(parameters.shape) == 4 else [1]
         self.mean, self.logvar = torch.chunk(parameters, 2, dim=1)
         self.logvar = torch.clamp(self.logvar, -30.0, 20.0)
         self.deterministic = deterministic
@@ -24,20 +35,20 @@ class DiagonalGaussianDistribution(object):
             if other is None:
                 return 0.5 * torch.sum(torch.pow(self.mean, 2)
                                        + self.var - 1.0 - self.logvar,
-                                       dim=[1, 2, 3])
+                                       dim=self.dims)
             else:
                 return 0.5 * torch.sum(
                     torch.pow(self.mean - other.mean, 2) / other.var
                     + self.var / other.var - 1.0 - self.logvar + other.logvar,
-                    dim=[1, 2, 3])
+                    dim=self.dims)
 
-    def nll(self, sample, dims=[1,2,3]):
+    def nll(self, sample, dims=None):
         if self.deterministic:
             return torch.Tensor([0.])
         logtwopi = np.log(2.0 * np.pi)
         return 0.5 * torch.sum(
             logtwopi + self.logvar + torch.pow(sample - self.mean, 2) / self.var,
-            dim=dims)
+            dim=dims if dims is not None else self.dims)
 
     def mode(self):
         return self.mean

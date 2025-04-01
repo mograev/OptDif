@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 
-from models.modules.attention import LinearAttention
+from src.models.modules.attention import LinearAttention
 
 
 def nonlinearity(x):

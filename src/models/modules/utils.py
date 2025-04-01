@@ -1,4 +1,5 @@
 import torch
+import importlib
 
 
 def checkpoint(func, inputs, params, flag):

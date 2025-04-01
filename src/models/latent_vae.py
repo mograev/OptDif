@@ -2,6 +2,8 @@ import torch
 import torch.nn.functional as F
 import pytorch_lightning as pl
 
+import argparse
+
 from src.models.modules.autoencoder import Encoder, Decoder
 from src.models.modules.distributions import DiagonalGaussianDistribution
 from src.models.modules.utils import instantiate_from_config
@@ -12,10 +14,8 @@ class LatentVAE(pl.LightningModule):
                  ddconfig,
                  lossconfig,
                  embed_dim,
-                 input_channels=4,  # SD latents are typically 4 channels
                  ckpt_path=None,
                  ignore_keys=[],
-                 latent_key="latent",  # Change from "image" to "latent"
                  monitor=None,
                  ):
         """
@@ -25,19 +25,17 @@ class LatentVAE(pl.LightningModule):
         Args:
             ddconfig: Configuration for the encoder and decoder.
             lossconfig: Configuration for the loss function.
-            embed_dim: The dimensionality of the latent space.
-            input_channels: Number of channels in the input latents (default is 4 for SD latents).
+            embed_dim: The dimensionality of the flat latent space (e.g. 128).
+            input_channels: Number of channels in the input latents.
             ckpt_path: Path to a checkpoint to load weights from.
             ignore_keys: Keys to ignore when loading weights from the checkpoint.
-            latent_key: Key in the batch that contains the latents (default is "latent").
             monitor: Metric to monitor for early stopping or model selection.
         """
         super().__init__()
-        self.latent_key = latent_key  # Rename to indicate we're processing latents
+        self.embed_dim = embed_dim
         
         # Modify ddconfig for latent processing
         latent_ddconfig = ddconfig.copy()
-        latent_ddconfig["in_channels"] = input_channels  # Set input channels to match SD latents
         
         self.encoder = Encoder(**latent_ddconfig)
         self.decoder = Decoder(**latent_ddconfig)
@@ -45,9 +43,22 @@ class LatentVAE(pl.LightningModule):
         self.beta = self.loss.beta
         
         assert latent_ddconfig["double_z"]
-        self.quant_conv = torch.nn.Conv2d(2*latent_ddconfig["z_channels"], 2*embed_dim, 1)
-        self.post_quant_conv = torch.nn.Conv2d(embed_dim, latent_ddconfig["z_channels"], 1)
-        self.embed_dim = embed_dim
+
+        # Calculate bottleneck spatial dimensions
+        bottleneck_resolution = latent_ddconfig["resolution"] // (2 ** (len(latent_ddconfig["ch_mult"])-1))    
+        spatial_size = bottleneck_resolution * bottleneck_resolution
+
+        # Create custom layers for flattening to 1D latent space
+        self.quant_conv = torch.nn.Sequential(
+            torch.nn.Flatten(),  # Flatten spatial dimensions to 1D
+            torch.nn.Linear(2*latent_ddconfig["z_channels"] * spatial_size, 2*embed_dim)  # Project to flat latent dim (2* for mean/logvar)
+        )
+        
+        # Create custom layers for reshaping from 1D latent back to spatial
+        self.post_quant_conv = torch.nn.Sequential(
+            torch.nn.Linear(embed_dim, latent_ddconfig["z_channels"] * spatial_size),  # Project from flat latent to spatial
+            torch.nn.Unflatten(1, (latent_ddconfig["z_channels"], bottleneck_resolution, bottleneck_resolution))  # Reshape to spatial
+        )
         
         if monitor is not None:
             self.monitor = monitor
@@ -66,6 +77,29 @@ class LatentVAE(pl.LightningModule):
                     del sd[k]
         self.load_state_dict(sd, strict=False)
         print(f"Restored from {path}")
+
+    def save_checkpoint(self, path, optimizer=None):
+        """
+        Save the current model state to a checkpoint file.
+        
+        Args:
+            path (str): Path where to save the checkpoint
+            optimizer (torch.optim.Optimizer, optional): Optimizer state to save
+        """
+        if optimizer is not None:
+            checkpoint = {
+                'state_dict': self.state_dict(),
+                'optimizer': optimizer.state_dict(),
+                'config': self.hparams
+            }
+        else:
+            checkpoint = {
+                'state_dict': self.state_dict(),
+                'config': self.hparams
+            }
+        
+        torch.save(checkpoint, path)
+        print(f"Model saved to {path}")
 
     def encode(self, x):
         h = self.encoder(x)
@@ -87,20 +121,13 @@ class LatentVAE(pl.LightningModule):
         dec = self.decode(z)
         return dec, posterior
     
-    def get_input(self, batch, k):
-        # Modified to handle latent inputs which don't need the same processing as images
-        x = batch[k]
+    def get_input(self, batch):
+        x = batch
         # Latents are already in the right format (B, C, H, W), so we just ensure correct dtype
         return x.to(memory_format=torch.contiguous_format).float()
-    
-    def training_step(self, batch, batch_idx):
-        inputs = self.get_input(batch, self.latent_key)
-        # Forward pass
-        reconstructed, posterior = self(inputs)
-        # Compute loss
 
     def training_step(self, batch, batch_idx):
-        inputs = self.get_input(batch, self.latent_key)
+        inputs = self.get_input(batch)
         reconstructions, posterior = self(inputs)
         
         # Simple combined loss (reconstruction + KL divergence)
@@ -118,7 +145,7 @@ class LatentVAE(pl.LightningModule):
         return total_loss
     
     def validation_step(self, batch, batch_idx):
-        inputs = self.get_input(batch, self.latent_key)
+        inputs = self.get_input(batch)
         reconstructions, posterior = self(inputs)
         
         rec_loss = F.mse_loss(reconstructions, inputs)
@@ -142,7 +169,7 @@ class LatentVAE(pl.LightningModule):
     @torch.no_grad()
     def log_images(self, batch, only_inputs=False, **kwargs):
         log = dict()
-        latents = self.get_input(batch, self.latent_key)
+        latents = self.get_input(batch)
         latents = latents.to(self.device)
         
         if not only_inputs:

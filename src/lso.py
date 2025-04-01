@@ -1,4 +1,4 @@
-""" Run weighted retraining for FFHQ with the VAE of the Stable Diffusion model """
+""" Run weighted retraining for FFHQ with the VAE of the Stable Diffusion model and a LatentVAE """
 
 import argparse
 from pathlib import Path
@@ -16,14 +16,14 @@ from torch.utils.data import DataLoader
 import pytorch_lightning as pl
 import numpy as np
 
-# Diffusers
+# Stable Diffusion VAE
 from diffusers import AutoencoderKL
 
 # My imports
-from src.dataloader.ffhq import FFHQWeightedTensorDataset, SimpleFilenameToTensorDataset
+from src.dataloader.ffhq import FFHQWeightedDataset, SimpleFilenameToTensorDataset
 from src.dataloader.weighting import DataWeighter
 from src.classification.smile_classifier import SmileClassifier
-from src.models.lit_vae import LitVAE
+from src.models.latent_vae import LatentVAE
 from src.utils import SubmissivePlProgressbar
 from src import DNGO_TRAIN_FILE, DNGO_OPT_FILE
 
@@ -38,9 +38,11 @@ def add_wr_args(parser):
     wr_group.add_argument("--retraining_frequency", type=int, required=True)
     wr_group.add_argument("--device", type=str, default="cpu", help="Device to use: 'cpu' or 'cuda'")
     wr_group.add_argument("--result_path", type=str, required=True, help="root directory to store results in")
-    wr_group.add_argument("--pretrained_model_path", type=str, default=None, help="path to pretrained model to use")
-    wr_group.add_argument("--pretrained_predictor_path", type=str, default=None, help="path to pretrained predictor to use")
-    wr_group.add_argument("--scaled_predictor_path", type=str, default=None, help="path to scaled predictor to use")
+    wr_group.add_argument("--sd_vae_path", type=str, default=None, help="path to pretrained Stable Diffusion VAE model to use")
+    wr_group.add_argument("--latent_vae_config_path", type=str, required=True, help="path to the config file of the latent VAE")
+    wr_group.add_argument("--latent_vae_ckpt_path", type=str, default=None, help="path to pretrained latent VAE model to use")
+    wr_group.add_argument("--predictor_path", type=str, default=None, help="path to pretrained predictor to use")
+    wr_group.add_argument("--scaled_predictor_path", type=str, default=None, help="path to temperature scaled pretrained predictor to use")
     wr_group.add_argument("--predictor_attr_file", type=str, default=None, help="path to attribute file of the predictor")
     wr_group.add_argument("--n_retrain_epochs", type=float, default=1., help="number of epochs to retrain for")
     wr_group.add_argument("--n_init_retrain_epochs", type=float, default=None, help="None to use n_retrain_epochs, 0.0 to skip init retrain")
@@ -88,7 +90,7 @@ def _run_command(command, command_name):
     logger.debug(f"{command_name} done in {time.time() - start_time:.1f}s")
 
 
-def retrain_vae(vae, datamodule, save_dir, version_str, num_epochs, device):
+def retrain_vae(latent_vae, datamodule, save_dir, version_str, num_epochs, device):
 
     # Make sure logs don't get in the way of progress bars
     pl._logger.setLevel(logging.CRITICAL)
@@ -98,7 +100,7 @@ def retrain_vae(vae, datamodule, save_dir, version_str, num_epochs, device):
     tb_logger = pl.loggers.TensorBoardLogger(
         save_dir=save_dir, version=version_str, name=""
     )
-    checkpointer = pl.callbacks.ModelCheckpoint(save_last=True, monitor="loss/val",)
+    checkpointer = pl.callbacks.ModelCheckpoint(save_last=True, monitor="val_total_loss")
 
     # Handle fractional epochs
     if num_epochs < 1:
@@ -109,9 +111,6 @@ def retrain_vae(vae, datamodule, save_dir, version_str, num_epochs, device):
         limit_train_batches = 1.0
     else:
         raise ValueError(f"invalid num epochs {num_epochs}")
-    
-    # Create LitVAE module to allow for PL training
-    vae_module = LitVAE(vae)
     
     # Enable PyTorch anomaly detection
     with torch.autograd.set_detect_anomaly(True):
@@ -126,11 +125,11 @@ def retrain_vae(vae, datamodule, save_dir, version_str, num_epochs, device):
         )
 
         # Fit model
-        trainer.fit(vae_module, datamodule)
+        trainer.fit(latent_vae, datamodule)
 
 
 def _choose_best_rand_points(args: argparse.Namespace, dataset):
-    """ helper function to choose points for training surrogate model """
+    """ Helper function to choose points for training surrogate model """
     chosen_point_set = set()
 
     # Best scores at start
@@ -155,84 +154,101 @@ def _choose_best_rand_points(args: argparse.Namespace, dataset):
     return chosen_points
 
 
-def _encode_images(vae, dataset, device):
-    """ Helper function to encode images into VAE latent space """
+def _encode_images(sd_vae, dataloader, device):
+    """ Helper function to encode images into SD-VAE latent space """
     z_encode = []
 
-    dataloader = DataLoader(
-        dataset,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers
-    )
-
     # Move VAE to the correct device
-    vae = vae.to(device)
-
+    sd_vae = sd_vae.to(device)
+    
     with torch.no_grad():
         for image_tensor_batch in dataloader:
             # Move images to the correct device
             images = image_tensor_batch.to(device)
-            
+
             # Encode images into latent space
-            latent_dist = vae.encode(images).latent_dist
-            latents = latent_dist.mean  # Use the mean of the latent distribution
-            z_encode.append(latents.cpu().numpy())
+            latents = sd_vae.encode(images).latent_dist.sample()  # Use the sampled latent distribution
+            
+            # Append each sampled latent to the list
+            for latent in latents:
+                z_encode.append(latent.cpu())
 
     # Free up GPU memory
-    vae = vae.cpu()
+    sd_vae = sd_vae.cpu()
     torch.cuda.empty_cache()
-
-    # Aggregate array
-    z_encode = np.concatenate(z_encode, axis=0)
 
     return z_encode
 
-def _batch_decode_z_and_props(vae, predictor, z, device, get_props=True):
+def _encode_latents(latent_vae, dataloader, device):
+    """ Helper function to encode SD latents into lower-dimensional VAE latent space """
+    zz_encode = []
+
+    # Move VAE to the correct device
+    latent_vae = latent_vae.to(device)
+
+    with torch.no_grad():
+        for sd_tensor_batch in dataloader:
+            # Move images to the correct device
+            sd_latents = sd_tensor_batch.to(device)
+            
+            # Encode images into latent space
+            latents = latent_vae.encode(sd_latents).sample()
+            zz_encode.append(latents.cpu().numpy())
+
+    # Free up GPU memory
+    latent_vae = latent_vae.cpu()
+    torch.cuda.empty_cache()
+
+    # Concatenate all points and convert to numpy
+    zz_encode = np.concatenate(zz_encode, axis=0)
+
+    return zz_encode
+
+
+def _decode_and_predict(latent_vae, sd_vae, predictor, z, device):
     """ Helper function to decode VAE latent vectors and calculate their properties """
     # Decode all points in a fixed decoding radius
     z_decode = []
-    z_decode_upscaled = []
     batch_size = 1000
+
+    # Move VAE to the correct device
+    latent_vae = latent_vae.to(device)
+    sd_vae = sd_vae.to(device)
 
     with torch.no_grad():
         for j in range(0, len(z), batch_size):
             # Move latent vectors to the correct device
             latents = z[j: j + batch_size].to(device)
 
-            # Decode latent vectors into images
-            decoded_images = vae.decode(latents).sample  # Decode and get the reconstructed images
-            decoded_images = decoded_images.cpu()  # Move to CPU for further processing
+            # Decode latent vectors to SD latents
+            sd_latents = latent_vae.decode(latents)
 
-            # Upscale images to the desired size
-            img_upscaled = torch.nn.functional.interpolate(
-                decoded_images, size=(128, 128), mode="bicubic", align_corners=False
-            )
+            # Decode SD latents to images
+            decoded_images = sd_vae.decode(sd_latents).sample
+            decoded_images = decoded_images.cpu()  # Move to CPU for further processing
+            
             z_decode.append(decoded_images)
-            z_decode_upscaled.append(img_upscaled)
+
+    # Free up GPU memory
+    latent_vae = latent_vae.cpu()
+    sd_vae = sd_vae.cpu()
+    torch.cuda.empty_cache()
 
     # Concatenate all points and convert to numpy
-    z_decode_upscaled = torch.cat(z_decode_upscaled, dim=0).to(device)
     z_decode = torch.cat(z_decode, dim=0).to(device)
 
     # Normalize decoded points
     img_mean = torch.Tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1).to(device)
     img_std = torch.Tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1).to(device)
-    z_decode_normalized = (z_decode_upscaled - img_mean) / img_std
+    z_decode_normalized = (z_decode - img_mean) / img_std
 
     # Calculate objective function values and choose which points to keep
-    if get_props:
-        with torch.no_grad():
-            predictions = predictor(z_decode_normalized)
-            probas_predictions = torch.nn.functional.softmax(predictions, dim=1).cpu().numpy()
-            z_prop = probas_predictions @ np.array([0, 1, 2, 3, 4, 5])
+    predictions = predictor(z_decode_normalized, batch_size=1000)
 
-    if get_props:
-        return z_decode, z_prop
-    else:
-        return z_decode
+    return z_decode.cpu(), predictions
 
 
-def latent_optimization(args, vae, predictor, datamodule, num_queries_to_do, bo_data_file, bo_run_folder, device="cpu", pbar=None, postfix=None):
+def latent_optimization(args, latent_vae, sd_vae, predictor, datamodule, num_queries_to_do, bo_data_file, bo_run_folder, device="cpu", pbar=None, postfix=None):
     """ Perform latent space optimization using traditional local optimization strategies """
 
     ##################################################
@@ -243,30 +259,34 @@ def latent_optimization(args, vae, predictor, datamodule, num_queries_to_do, bo_
     chosen_indices = _choose_best_rand_points(args, datamodule)
 
     # Create a new dataset with only the chosen points
-    data = [datamodule.data_train[i] for i in chosen_indices]
-    temp_dataset = SimpleFilenameToTensorDataset(data, args.pt_dir)
+    filenames = [datamodule.data_train[i] for i in chosen_indices]
+    sd_latent_dir = datamodule.mode_dirs["sd_latent"]
+    temp_dataset = SimpleFilenameToTensorDataset(filenames, sd_latent_dir)
     targets = datamodule.attr_train[chosen_indices]
 
-    # Next, encode the data to latent space
-    latent_points = _encode_images(vae, temp_dataset, device)
+    # Create a dataloader for the chosen points
+    temp_dataloader = DataLoader(
+        temp_dataset,
+        batch_size=args.batch_size,
+        num_workers=args.num_workers,
+        shuffle=False,
+    )
+
+    # Encode the data to the lower-dimensional latent space
+    latent_points = _encode_latents(latent_vae, temp_dataloader, args.device)
     logger.debug(latent_points.shape)
 
     # Save points to file
-    def _save_bo_data(latent_points, targets):
+    targets = -targets.reshape(-1, 1)  # Since it is a minimization problem
 
-        # Prevent overfitting to bad points
-        targets = -targets.reshape(-1, 1)  # Since it is a minimization problem
-
-        # Save the file
-        np.savez_compressed(
-            bo_data_file,
-            X_train=latent_points.astype(np.float64),
-            X_test=[],
-            y_train=targets.astype(np.float64),
-            y_test=[],
-        )
-
-    _save_bo_data(latent_points, targets)
+    # Save the file
+    np.savez_compressed(
+        bo_data_file,
+        X_train=latent_points.astype(np.float64),
+        X_test=[],
+        y_train=targets.astype(np.float64),
+        y_test=[],
+    )
 
     # Part 1: fit surrogate model
     # ===============================
@@ -331,8 +351,9 @@ def latent_optimization(args, vae, predictor, datamodule, num_queries_to_do, bo_
     z_opt = np.load(opt_path)
     
     # Decode point
-    x_new, y_new = _batch_decode_z_and_props(
-        vae,
+    x_new, y_new = _decode_and_predict(
+        latent_vae,
+        sd_vae,
         predictor,
         torch.as_tensor(z_opt, device=device),
         device
@@ -355,24 +376,49 @@ def main_loop(args):
 
     # Seeding
     pl.seed_everything(args.seed)
+
+    # Make result directory
+    result_dir = Path(args.result_path).resolve()
+    result_dir.mkdir(parents=True)
+    # Create subdirectories
+    data_dir = result_dir / "data"
+    data_dir.mkdir()
+    setup_logger(result_dir / "main.log")
     
     # Load data
-    datamodule = FFHQWeightedTensorDataset(args, DataWeighter(args))
-    datamodule.setup() # assignment into train/validation split is made and weights are set
+    datamodule = FFHQWeightedDataset(args, DataWeighter(args))
     
     # Load pre-trained SD-VAE model
-    if args.pretrained_model_path == "stabilityai/stable-diffusion-3.5-medium":
-        vae = AutoencoderKL.from_pretrained("stabilityai/stable-diffusion-3.5-medium", subfolder="vae")
-        vae.eval()
+    if args.sd_vae_path == "stabilityai/stable-diffusion-3.5-medium":
+        sd_vae = AutoencoderKL.from_pretrained("stabilityai/stable-diffusion-3.5-medium", subfolder="vae")
+        sd_vae.eval()
     else:
-        raise NotImplementedError(args.pretrained_model_code)
+        raise NotImplementedError(args.sd_vae_path)
     
+    # Freeze the SD-VAE model
+    for param in sd_vae.parameters():
+        param.requires_grad = False
+    
+    # Load latent VAE config
+    with open(args.latent_vae_config_path, "r") as f:
+        latent_vae_config = json.load(f)
+
+    # Initialize LatentVAE model
+    latent_vae = LatentVAE(
+        ddconfig=latent_vae_config["ddconfig"],
+        lossconfig=latent_vae_config["lossconfig"],
+        embed_dim=latent_vae_config["embed_dim"],
+        ckpt_path=args.latent_vae_ckpt_path,
+        monitor="val_total_loss",
+    )
+
     # Load pretrained (temperature-scaled) predictor
     predictor = SmileClassifier(
-        model_path=args.pretrained_predictor_path,
+        model_path=args.predictor_path,
         attr_file=args.predictor_attr_file,
         scaled_model_path=args.scaled_predictor_path,
         device=args.device,
+        logfile=result_dir / "predictor.log",
     )
     
     # Set up results tracking
@@ -390,22 +436,30 @@ def main_loop(args):
         retrain_left=num_retrain, best=-float("inf"), n_train=len(datamodule.data_train)
     )
 
+    # Save retraining hyperparameters in JSON format
+    with open(result_dir / 'retraining_hparams.json', 'w') as f:
+        json.dump(args.__dict__, f, indent=4)
+
+    # Encode images into SD-VAE latent space
+    sd_latents = _encode_images(
+        sd_vae,
+        datamodule.set_mode("img_tensor").train_dataloader(),
+        args.device
+    )
+    
+    # Save the encoded images as tensors
+    sd_latent_dir = data_dir / "sd_latents"
+    sd_latent_dir.mkdir()
+    for filename, sd_latent in zip(datamodule.train_dataset.filename_list, sd_latents):
+        torch.save(sd_latent, sd_latent_dir / f"{filename}.pt", pickle_protocol=pickle.HIGHEST_PROTOCOL)
+
+    # Add SD latents to datamodule
+    datamodule.add_mode("sd_latent", sd_latent_dir)
+
     # Main loop
     with tqdm(
         total=args.query_budget, dynamic_ncols=True, smoothing=0.0, file=sys.stdout
     ) as pbar:
-
-        # Make result directory
-        result_dir = Path(args.result_path).resolve()
-        result_dir.mkdir(parents=True)
-        # Create subdirectories
-        data_dir = result_dir / "data"
-        data_dir.mkdir()
-        setup_logger(result_dir / "log.txt")
-
-        # Save retraining hyperparameters in JSON format
-        with open(result_dir / 'retraining_hparams.json', 'w') as f:
-            json.dump(args.__dict__, f, indent=4)
 
         for ret_idx in range(num_retrain):
             pbar.set_postfix(postfix)
@@ -414,7 +468,8 @@ def main_loop(args):
             # Decide whether to retrain the VAE
             samples_so_far = args.retraining_frequency * ret_idx
 
-            # Optionally do retraining
+            # Retraining
+            datamodule.set_mode("sd_latent")
             num_epochs = args.n_retrain_epochs
             if ret_idx == 0 and args.n_init_retrain_epochs is not None:
                 # default: initial fine-tuning of pre-trained model for 1 epoch
@@ -424,7 +479,7 @@ def main_loop(args):
                 version = f"retrain_{samples_so_far}"
                 # default: run through 10% of the weighted training data in retraining epoch
                 retrain_vae(
-                    vae, datamodule, retrain_dir, version, num_epochs, args.device
+                    latent_vae, datamodule, retrain_dir, version, num_epochs, args.device
                 )
 
             # Update progress bar
@@ -445,7 +500,8 @@ def main_loop(args):
             # Perform latent optimization
             x_new, y_new, z_query = latent_optimization(
                 args,
-                vae,
+                latent_vae,
+                sd_vae,
                 predictor,
                 datamodule,
                 num_queries_to_do,
@@ -488,7 +544,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser = add_wr_args(parser)
     parser = add_dngo_args(parser)
-    parser = FFHQWeightedTensorDataset.add_data_args(parser)
+    parser = FFHQWeightedDataset.add_data_args(parser)
     parser = DataWeighter.add_weight_args(parser)
     
     args = parser.parse_args()
