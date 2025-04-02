@@ -1,16 +1,33 @@
-import torch
-from torch.utils.data import Dataset
+"""
+Utility classes for datasets that load tensors from filenames.
+Source (SimpleFilenameToTensorDataset): https://github.com/janschwedhelm/master-thesis/blob/main/src/dataloader_celeba_weighting.py
+"""
 
 import os
+
+import torch
+from torch.utils.data import Dataset
 
 
 class SimpleFilenameToTensorDataset(Dataset):
     """ Implements a dataset that transforms filenames to corresponding tensors """
     def __init__(self, filename_list, tensor_dir):
+        """
+        Args:
+            filename_list: List of filenames (without extension)
+            tensor_dir: Directory where tensor files are stored
+        """
         self.filename_list = filename_list
         self.tensor_dir = tensor_dir
 
     def __getitem__(self, index):
+        """
+        Args:
+            index: Index of the item to retrieve
+        Returns:
+            tensor: Loaded tensor corresponding to the filename
+        """
+        # Get the filename
         filename = self.filename_list[index]
         
         # Check if filename already has an extension
@@ -72,6 +89,13 @@ class MultiModeDataset(Dataset):
         return self
 
     def __getitem__(self, index):
+        """
+        Args:
+            index: Index of the item to retrieve
+        Returns:
+            tensor: Loaded tensor corresponding to the filename
+        """
+        # Get the filename
         filename = self.filename_list[index]
 
         # Get the directory for the current mode
@@ -99,4 +123,5 @@ class MultiModeDataset(Dataset):
             raise RuntimeError(f"Failed to load tensor for {filename} in mode {self.mode} from path {path}: {str(e)}")
 
     def __len__(self):
+        """Returns the length of the dataset"""
         return len(self.filename_list)

@@ -1,24 +1,34 @@
-import functools
+"""
+Data weighting methods based on properties of the data.
+Sources: 
+    https://github.com/janschwedhelm/master-thesis/blob/main/src/utils.py
+    https://github.com/dhbrookes/CbAS/blob/master/src/optimization_algs.py
+"""
+
 import argparse
+import functools
 import numpy as np
 from scipy import stats
 
-# Weighting functions
+
 class DataWeighter:
-    
+    """Class for weighting data based on properties."""
+    # Supported weighting types
     weight_types = ["uniform", "rank", "dbas", "fb", "rwr", "cem-pi"]
 
     def __init__(self, hparams):
-
+        """
+        Initialize the DataWeighter class.
+        Args:
+            hparams (argparse.Namespace): Command line arguments.
+        """
+        # Initialize the weighting function based on the specified type
         if hparams.weight_type in ["uniform", "fb"]:
             self.weighting_function = DataWeighter.uniform_weights
         elif hparams.weight_type == "rank":
             self.weighting_function = functools.partial(
                 DataWeighter.rank_weights, k_val=hparams.rank_weight_k
             )
-
-        # Most other implementations are from:
-        # https://github.com/dhbrookes/CbAS/blob/master/src/optimization_algs.py
         elif hparams.weight_type == "dbas":
             self.weighting_function = functools.partial(
                 DataWeighter.dbas_weights,
@@ -33,7 +43,6 @@ class DataWeighter:
             self.weighting_function = functools.partial(
                 DataWeighter.cem_pi_weights, quantile=hparams.weight_quantile
             )
-
         else:
             raise NotImplementedError
 
@@ -42,13 +51,12 @@ class DataWeighter:
 
     @staticmethod
     def normalize_weights(weights: np.array):
-        """ Normalizes the given weights """
+        """Normalizes the given weights."""
         return weights / np.mean(weights)
 
     @staticmethod
     def reduce_weight_variance(weights: np.array, data: np.array):
-        """ Reduces the variance of the given weights via data replication """
-
+        """Reduces the variance of the given weights via data replication."""
         weights_new = []
         data_new = []
         for w, d in zip(weights, data):
@@ -65,14 +73,26 @@ class DataWeighter:
 
     @staticmethod
     def uniform_weights(properties: np.array):
+        """
+        Returns uniform weights for all properties.
+        This is equivalent to no weighting.
+        Args:
+            properties (np.array): Array of properties.
+        Returns:
+            np.array: Array of uniform weights.
+        """
         return np.ones_like(properties)
 
-    # computes ranks from paper
     @staticmethod
     def rank_weights(properties: np.array, k_val: float):
         """
         Calculates rank weights assuming maximization.
         Weights are not normalized.
+        Args:
+            properties (np.array): Array of properties.
+            k_val (float): Rank parameter.
+        Returns:
+            np.array: Array of rank weights.
         """
         if np.isinf(k_val):
             return np.ones_like(properties)
@@ -82,6 +102,15 @@ class DataWeighter:
 
     @staticmethod
     def dbas_weights(properties: np.array, quantile: float, noise: float):
+        """
+        Calculates weights based on the DBAS method.
+        Args:
+            properties (np.array): Array of properties.
+            quantile (float): Quantile for cutoff.
+            noise (float): Noise parameter.
+        Returns:
+            np.array: Array of weights.
+        """
         y_star = np.quantile(properties, quantile)
         if np.isclose(noise, 0):
             weights = (properties >= y_star).astype(float)
@@ -91,7 +120,14 @@ class DataWeighter:
 
     @staticmethod
     def cem_pi_weights(properties: np.array, quantile: float):
-
+        """
+        Calculates weights based on the CEM-PI method.
+        Args:
+            properties (np.array): Array of properties.
+            quantile (float): Quantile for cutoff.
+        Returns:
+            np.array: Array of weights.
+        """
         # Find quantile cutoff
         cutoff = np.quantile(properties, quantile)
         weights = (properties >= cutoff).astype(float)
@@ -99,7 +135,14 @@ class DataWeighter:
 
     @staticmethod
     def rwr_weights(properties: np.array, alpha: float):
-
+        """
+        Calculates weights based on the RWR method.
+        Args:
+            properties (np.array): Array of properties.
+            alpha (float): Alpha parameter for exponential weighting.
+        Returns:
+            np.array: Array of weights.
+        """
         # Subtract max property value for more stable calculation
         # It doesn't change the weights since they are normalized by the sum anyways
         prop_max = np.max(properties)
@@ -109,6 +152,7 @@ class DataWeighter:
 
     @staticmethod
     def add_weight_args(parser: argparse.ArgumentParser):
+        """Adds arguments for weighting to the parser."""
         weight_group = parser.add_argument_group("weighting")
         weight_group.add_argument("--weight_type", type=str, choices=DataWeighter.weight_types, default="uniform")
         weight_group.add_argument("--rank_weight_k", type=float, default=None, help="k parameter for rank weighting")

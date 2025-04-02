@@ -1,102 +1,26 @@
-import torch
-from torch.utils.data import DataLoader, WeightedRandomSampler, Dataset
+"""
+Weighted DataModule for the FFHQ dataset
+"""
+
+import json
+
+from torch.utils.data import DataLoader, WeightedRandomSampler
 import pytorch_lightning as pl
-from PIL import Image
-from torchvision import transforms
 import numpy as np
 
-import os
-import json
-from tqdm import tqdm
-
-from src.dataloader.utils import SimpleFilenameToTensorDataset, MultiModeDataset
-
-
-# class FFHQ(Dataset):
-#     """Dataset class for the FFHQ dataset."""
-
-#     def __init__(self, img_dir, img_tensor_dir, attr_path, max_property_value=5, min_property_value=0, do_preprocess=False):
-#         """Initialize and preprocess the FFHQ dataset."""
-#         self.img_dir = img_dir
-#         self.img_tensor_dir = img_tensor_dir
-#         self.attr_path = attr_path
-#         self.dataset = []
-#         self.max_property_value = max_property_value
-#         self.min_property_value = min_property_value
-
-#         # Load the attribute JSON file
-#         with open(self.attr_path, 'r') as f:
-#             attr_dict = json.load(f)
-            
-#         # Fill dataset with sorted filenames and attribute data
-#         for key in sorted(attr_dict.keys()):
-#             filename = key.split('.')[0]
-#             if attr_dict[key] <= self.max_property_value and attr_dict[key] >= self.min_property_value:
-#                 self.dataset.append([filename, attr_dict[key]])
-        
-#         # Set the number of images
-#         self.num_images = len(self.dataset)
-
-#         # Preprocess the dataset if necessary
-#         if do_preprocess:
-#             self._preprocess()
-
-
-#     def _preprocess(self):
-#         """Preprocess the FFHQ dataset."""
-
-#         print("Preprocessing the FFHQ dataset...")
-        
-#         # Define preprocessing transformations
-#         transform = transforms.Compose([
-#             transforms.Resize((256, 256)),  # Resize to 256x256
-#             transforms.ToTensor(),         # Convert to tensor
-#             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])  # Normalize
-#         ])
-
-#         # Create directory for tensor files
-#         os.makedirs(self.img_tensor_dir, exist_ok=True)
-
-#         # Get a list of all images that need to be converted
-#         images_to_convert = [filename for filename, _ in self.dataset if not os.path.exists(f"{self.img_tensor_dir}/{filename}.pt")]
-        
-#         # Convert images to .pt format
-#         for filename, _ in tqdm(images_to_convert):
-#             # Load image
-#             image_path = os.path.join(self.img_dir, f"{filename}.png")
-#             image = Image.open(image_path).convert("RGB")
-
-#             # Apply transformations
-#             tensor = transform(image)
-
-#             # Save tensor to .pt file
-#             torch.save(tensor, os.path.join(self.img_tensor_dir, f"{filename}.pt"))
-
-#         print("Conversion to .pt format complete. Finished preprocessing the FFHQ dataset.")
-
-
-#     def __getitem__(self, index):
-#         """Return one image and its corresponding attribute label."""
-
-#         # Get the image filename and attribute value
-#         filename, attr_value = self.dataset[index]
-
-#         # Load image
-#         image = torch.load(f"{self.img_tensor_dir}/{filename}.pt")
-
-#         return image.squeeze(0), attr_value
-
-#     def __len__(self):
-#         """Return the number of images."""
-#         return self.num_images
-    
+from src.dataloader.utils import MultiModeDataset
 
 
 class FFHQWeightedDataset(pl.LightningDataModule):
     """DataModule class for the FFHQ dataset with weighted sampling with support for multiple tensor modes."""
 
     def __init__(self, args, data_weighter):
-        """Initialize the FFHQWeightedDataset class."""
+        """
+        Initialize the FFHQWeightedDataset class.
+        Args:
+            args (argparse.Namespace): Command line arguments.
+            data_weighter (object): DataWeighter object for weighting the dataset.
+        """
 
         super().__init__()
 
@@ -137,6 +61,7 @@ class FFHQWeightedDataset(pl.LightningDataModule):
 
     @staticmethod
     def add_data_args(parent_parser):
+        """Add data-related arguments to the argument parser."""
         data_group = parent_parser.add_argument_group(title="data")
         data_group.add_argument("--img_dir", type=str, required=True)
         data_group.add_argument("--img_tensor_dir", type=str, required=True)
@@ -156,7 +81,6 @@ class FFHQWeightedDataset(pl.LightningDataModule):
 
     def _setup(self, stage=None):
         """Set up the dataset for training and validation."""
-
         # Load the attribute JSON file
         with open(self.attr_path, 'r') as f:
             attr_dict = json.load(f)
@@ -205,16 +129,28 @@ class FFHQWeightedDataset(pl.LightningDataModule):
     def set_weights(self):
         """Set the weights for the weighted sampler."""
 
+        # Set weights for training dataset
         self.train_weights = self.data_weighter.weighting_function(self.attr_train)
         self.train_sampler = WeightedRandomSampler(self.train_weights, len(self.train_weights), replacement=True)
 
+        # Set weights for validation dataset
         self.val_weights = self.data_weighter.weighting_function(self.attr_val)
         self.val_sampler = WeightedRandomSampler(self.val_weights, len(self.val_weights), replacement=True)
 
 
     def add_mode(self, name, dir, set_mode=False):
-        """Add a new tensor mode to the dataset."""
-
+        """
+        Add a new tensor mode to the dataset.
+        Args:
+            name (str): Name of the new mode.
+            dir (str): Directory path for the new mode.
+            set_mode (bool): Whether to set the new mode as the current mode.
+        Raises:
+            ValueError: If the mode already exists or if the directory is not found.
+        Returns:
+            self: Returns the updated FFHQWeightedDataset instance.
+        """
+        # Check if the directory exists
         if name in self.mode_dirs:
             raise ValueError(f"Mode {name} already exists. Choose a different name.")
         
@@ -232,27 +168,37 @@ class FFHQWeightedDataset(pl.LightningDataModule):
         return self
 
     def set_mode(self, mode):
-        """Switch between different representation modes."""
-
+        """
+        Switch between different representation modes.
+        Args:
+            mode (str): The mode to set.
+        Raises:
+            ValueError: If the mode is not found in mode_dirs.
+        Returns:
+            self: Returns the updated FFHQWeightedDataset instance.
+        """
+        # Check if the mode is valid
         if mode not in self.mode_dirs and mode != 'direct':
             raise ValueError(f"Mode {mode} not found in mode_dirs. Available modes: {list(self.mode_dirs.keys()) + ['direct']}")
         
+        # Set the current mode
         self.mode = mode
+
+        # Update the datasets to use the new mode
         self.train_dataset.set_mode(mode)
         self.val_dataset.set_mode(mode)
         
         return self
     
-    def get_mode_dir(self, mode):
-        """Get the directory for a specific mode."""
-        if mode not in self.mode_dirs:
-            raise ValueError(f"Mode {mode} not found in mode_dirs. Available modes: {list(self.mode_dirs.keys())}")
-        
-        return self.mode_dirs[mode]
-
     def append_train_data(self, data, labels):
-        """Append data to the training dataset."""
-
+        """
+        Append data to the training dataset.
+        Args:
+            data (list): List of filenames or tensors to append.
+            labels (numpy.ndarray): Corresponding labels for the data.
+        Raises:
+            AssertionError: If the length of data and labels do not match.
+        """
         # Check if data is a list of filenames or a tensor
         self.data_train += data
         self.attr_train = np.append(self.attr_train, labels, axis=0)
@@ -269,6 +215,7 @@ class FFHQWeightedDataset(pl.LightningDataModule):
         self.set_weights()
 
     def train_dataloader(self):
+        """Return the training DataLoader."""
         return DataLoader(
             self.train_dataset,
             batch_size=self.batch_size,
@@ -278,6 +225,7 @@ class FFHQWeightedDataset(pl.LightningDataModule):
         )
 
     def val_dataloader(self):
+        """Return the validation DataLoader."""
         return DataLoader(
             self.val_dataset,
             batch_size=self.batch_size,
