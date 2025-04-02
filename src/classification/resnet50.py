@@ -1,3 +1,8 @@
+"""
+ResNet-50 model for attribute classification
+Source: https://github.com/janschwedhelm/master-thesis/blob/main/src/resnet50.py
+"""
+
 import json
 
 import torch.nn as nn
@@ -32,9 +37,18 @@ def conv1x1(in_planes, out_planes, stride=1):
 
 
 class BasicBlock(nn.Module):
+    """Basic Block for ResNet"""
     expansion = 1
 
     def __init__(self, inplanes, planes, stride=1, downsample=None):
+        """
+        Initialize BasicBlock
+        Args:
+            inplanes (int): Number of input channels
+            planes (int): Number of output channels
+            stride (int): Stride for the convolution
+            downsample (nn.Module): Downsample layer
+        """
         super(BasicBlock, self).__init__()
         self.conv1 = conv3x3(inplanes, planes, stride)
         self.bn1 = nn.BatchNorm2d(planes)
@@ -45,6 +59,13 @@ class BasicBlock(nn.Module):
         self.stride = stride
 
     def forward(self, x):
+        """
+        Forward pass for BasicBlock
+        Args:
+            x (torch.Tensor): Input tensor
+        Returns:
+            torch.Tensor: Output tensor
+        """
         identity = x
 
         out = self.conv1(x)
@@ -64,9 +85,18 @@ class BasicBlock(nn.Module):
 
 
 class Bottleneck(nn.Module):
+    """Bottleneck Block for ResNet"""
     expansion = 4
 
     def __init__(self, inplanes, planes, stride=1, downsample=None):
+        """
+        Initialize Bottleneck
+        Args:
+            inplanes (int): Number of input channels
+            planes (int): Number of output channels
+            stride (int): Stride for the convolution
+            downsample (nn.Module): Downsample layer
+        """
         super(Bottleneck, self).__init__()
         self.conv1 = conv1x1(inplanes, planes)
         self.bn1 = nn.BatchNorm2d(planes)
@@ -79,6 +109,13 @@ class Bottleneck(nn.Module):
         self.stride = stride
 
     def forward(self, x):
+        """
+        Forward pass for Bottleneck
+        Args:
+            x (torch.Tensor): Input tensor
+        Returns:
+            torch.Tensor: Output tensor
+        """
         identity = x
 
         out = self.conv1(x)
@@ -102,8 +139,15 @@ class Bottleneck(nn.Module):
 
 
 class fc_block(nn.Module):
-
+    """Fully connected block for ResNet"""
     def __init__(self, inplanes, planes, drop_rate=0.15):
+        """
+        Initialize fc_block
+        Args:
+            inplanes (int): Number of input channels
+            planes (int): Number of output channels
+            drop_rate (float): Dropout rate
+        """
         super(fc_block, self).__init__()
         self.fc = nn.Linear(inplanes, planes)
         self.bn = nn.BatchNorm1d(planes)
@@ -113,6 +157,13 @@ class fc_block(nn.Module):
         self.drop_rate = drop_rate
 
     def forward(self, x):
+        """
+        Forward pass for fc_block
+        Args:
+            x (torch.Tensor): Input tensor
+        Returns:
+            torch.Tensor: Output tensor
+        """
         x = self.fc(x)
         x = self.bn(x)
         if self.drop_rate > 0:
@@ -122,13 +173,23 @@ class fc_block(nn.Module):
 
 
 class ResNet(nn.Module):
-
+    """ResNet model for attribute classification"""
     def __init__(self,
                  block,
                  layers,
                  attr_file,
                  zero_init_residual=False,
                  dropout_rate=0):
+        """
+        Initialize ResNet
+        Args:
+            block (nn.Module): Block type (BasicBlock or Bottleneck)
+            layers (list): List of number of blocks in each layer
+            attr_file (str): Path to the attribute file
+            zero_init_residual (bool): If True, zero-initialize the last BN
+                in each residual branch
+            dropout_rate (float): Dropout rate for fully connected layers
+        """
         super(ResNet, self).__init__()
         self.inplanes = 64
         self.conv1 = nn.Conv2d(
@@ -177,6 +238,16 @@ class ResNet(nn.Module):
                     nn.init.constant_(m.bn2.weight, 0)
 
     def _make_layer(self, block, planes, blocks, stride=1):
+        """
+        Create a layer of blocks
+        Args:
+            block (nn.Module): Block type (BasicBlock or Bottleneck)
+            planes (int): Number of output channels
+            blocks (int): Number of blocks in the layer
+            stride (int): Stride for the convolution
+        Returns:
+            nn.Sequential: Layer of blocks
+        """
         downsample = None
         if stride != 1 or self.inplanes != planes * block.expansion:
             downsample = nn.Sequential(
@@ -193,6 +264,13 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x):
+        """
+        Forward pass for ResNet
+        Args:
+            x (torch.Tensor): Input tensor
+        Returns:
+            list: List of output tensors for each attribute
+        """
         x = self.conv1(x)
         x = self.bn1(x)
         x = self.relu(x)
@@ -218,7 +296,8 @@ class ResNet(nn.Module):
 
 
 def resnet50(pretrained=True, **kwargs):
-    """Constructs a ResNet-50 model.
+    """
+    Constructs a ResNet-50 model.
     Args:
         pretrained (bool): If True, returns a model pre-trained on ImageNet
     """

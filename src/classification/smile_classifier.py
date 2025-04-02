@@ -1,3 +1,8 @@
+"""
+SmileClassifier Class.
+This class uses a pre-trained ResNet50 model to classify smile attributes
+"""
+
 import torch
 import numpy as np
 
@@ -16,6 +21,11 @@ INPUT_SIZE = 224 # ResNet50 input size
 def _setup_logger(logfile, log_level):
     """
     Set up a logger to log messages to a file and the console.
+    Args:
+        logfile (str): Path to the log file.
+        log_level (int): Logging level (e.g., logging.INFO, logging.DEBUG).
+    Returns:
+        logger (logging.Logger): Configured logger instance.
     """
     logger = logging.getLogger(__name__)
     logger.setLevel(log_level)
@@ -49,7 +59,7 @@ class SmileClassifier:
             scaled (bool): If True, load a scaled model.
             device (str): Device to use for computation ("cpu" or "cuda").
             logfile (str): Path to the log file.
-            verbose (bool): If True, enable verbose logging.
+            log_level (int): Logging level (e.g., logging.INFO, logging.DEBUG).
         """
         # Set up logger
         self.logger = _setup_logger(logfile, log_level)
@@ -87,8 +97,13 @@ class SmileClassifier:
     def classify_from_path(self, tensor_paths, batch_size=128, return_prob=False):
         """
         Classify a single image or a batch of images from file paths.
+        Args:
+            tensor_paths (str or list): Path(s) to the image tensor(s).
+            batch_size (int): Batch size for processing.
+            return_prob (bool): If True, return probabilities instead of smile scores.
+        Returns:
+            np.ndarray: Smile scores or probabilities for the input images.
         """
-
         # Ensure image_paths is a list
         if isinstance(tensor_paths, str):
             tensor_paths = [tensor_paths]
@@ -155,6 +170,15 @@ class SmileClassifier:
 
 
     def classify_from_tensor(self, images, batch_size=128, return_prob=False):
+        """"
+        Classify a single image or a batch of images from tensors.
+        Args:
+            images (torch.Tensor or list): Image tensor(s) to classify.
+            batch_size (int): Batch size for processing.
+            return_prob (bool): If True, return probabilities instead of smile scores.
+        Returns:
+            np.ndarray: Smile scores or probabilities for the input images.
+        """
         # Split input into smaller batches
         outputs = []
         for start_idx in range(0, len(images), batch_size):
@@ -181,5 +205,6 @@ class SmileClassifier:
 
 
     def __call__(self, *args, **kwds):
+        """Classify images using the model."""
         # If called, run classification
         return self.classify_from_tensor(*args, **kwds)
