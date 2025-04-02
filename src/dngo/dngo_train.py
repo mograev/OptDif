@@ -36,9 +36,8 @@ def dngo_train(args):
     model = DNGO(normalize_input=args.normalize_input, normalize_output=args.normalize_output, do_mcmc=args.do_mcmc)
 
     # Reshape the data
-    X_train = X_train.reshape(X_train.shape[0], -1)
-    LOGGER.info(f"X_train shape: {X_train.shape}")
     y_train = y_train.reshape(y_train.shape[0])
+    LOGGER.info(f"X_train shape: {X_train.shape}")
     LOGGER.info(f"y_train shape: {y_train.shape}")
 
     LOGGER.info("Start model fitting")

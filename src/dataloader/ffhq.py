@@ -118,6 +118,7 @@ class FFHQWeightedDataset(pl.LightningDataModule):
         self.batch_size = args.batch_size
         self.num_workers = args.num_workers
         self.data_weighter = data_weighter
+        self.val_split = args.val_split
 
         # Will be set in setup()
         self.data_train = None
@@ -144,6 +145,7 @@ class FFHQWeightedDataset(pl.LightningDataModule):
         data_group.add_argument("--min_property_value", type=float, default=0.)
         data_group.add_argument("--batch_size", type=int, default=128)
         data_group.add_argument("--num_workers", type=int, default=4)
+        data_group.add_argument("--val_split", type=float, default=0.)
 
         return parent_parser
 
@@ -168,13 +170,22 @@ class FFHQWeightedDataset(pl.LightningDataModule):
         
         # Convert dataset to numpy array
         dataset_as_numpy = np.array(dataset)
-        self.data_train = dataset_as_numpy[:, 0].tolist()
-        self.attr_train = dataset_as_numpy[:, 1].astype(np.float32)
 
-        # Add pseudo validation batch for PyTorch Lightning
-        self.data_val = dataset_as_numpy[0:self.batch_size, 0].tolist()
-        self.attr_val = dataset_as_numpy[0:self.batch_size, 1].astype(np.float32)
-        
+        if self.val_split == 0.:
+            self.data_train = dataset_as_numpy[:, 0].tolist()
+            self.attr_train = dataset_as_numpy[:, 1].astype(np.float32)
+            # Add pseudo validation batch for PyTorch Lightning
+            self.data_val = dataset_as_numpy[0:self.batch_size, 0].tolist()
+            self.attr_val = dataset_as_numpy[0:self.batch_size, 1].astype(np.float32)
+
+        else:
+            # Split the dataset into training and validation sets
+            split_idx = int(len(dataset) * (1 - self.val_split))
+            self.data_train = dataset_as_numpy[:split_idx, 0].tolist()
+            self.attr_train = dataset_as_numpy[:split_idx, 1].astype(np.float32)
+            self.data_val = dataset_as_numpy[split_idx:, 0].tolist()
+            self.attr_val = dataset_as_numpy[split_idx:, 1].astype(np.float32)
+            
         # Create tensor datasets
         self.train_dataset = MultiModeDataset(
             filename_list=self.data_train,
@@ -201,7 +212,7 @@ class FFHQWeightedDataset(pl.LightningDataModule):
         self.val_sampler = WeightedRandomSampler(self.val_weights, len(self.val_weights), replacement=True)
 
 
-    def add_mode(self, name, dir):
+    def add_mode(self, name, dir, set_mode=False):
         """Add a new tensor mode to the dataset."""
 
         if name in self.mode_dirs:
@@ -213,6 +224,10 @@ class FFHQWeightedDataset(pl.LightningDataModule):
         # Update existing datasets if they exist
         self.train_dataset.add_mode(name, dir)
         self.val_dataset.add_mode(name, dir)
+
+        # If set_mode is True, set the current mode to the new mode
+        if set_mode:
+            self.set_mode(name)
             
         return self
 

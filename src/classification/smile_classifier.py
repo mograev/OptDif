@@ -40,13 +40,13 @@ def _setup_logger(logfile, log_level):
     return logger
 
 class SmileClassifier:
-    def __init__(self, model_path, attr_file, scaled_model_path=None, device="cpu", logfile="smile_classifier.log", log_level=logging.INFO):
+    def __init__(self, model_path, attr_file, scaled=False, device="cpu", logfile="smile_classifier.log", log_level=logging.INFO):
         """
         Initialize the SmileClassifier.
         Args:
             model_path (str): Path to the model checkpoint.
             attr_file (str): Path to the attribute file.
-            scaled_model_path (str): Path to the temperature-scaled model checkpoint.
+            scaled (bool): If True, load a scaled model.
             device (str): Device to use for computation ("cpu" or "cuda").
             logfile (str): Path to the log file.
             verbose (bool): If True, enable verbose logging.
@@ -61,10 +61,10 @@ class SmileClassifier:
         self.device = device
         self.logger.debug(f"Using device: {device}")
 
-        # Load temperature scaling
-        if scaled_model_path:
-            self.logger.debug(f"Loading scaled model from {scaled_model_path}")
-            checkpoint = torch.load(scaled_model_path, map_location=torch.device(device))
+        # Load model checkpoint
+        if scaled:
+            self.logger.debug(f"Loading scaled model from {model_path}")
+            checkpoint = torch.load(model_path, map_location=torch.device(device))
             self.model = ModelWithTemperature(self.model)
             self.model.load_state_dict(checkpoint, strict=True)
         else:

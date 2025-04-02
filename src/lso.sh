@@ -15,7 +15,6 @@ num_workers=4
 
 # Weighter
 weight_type="uniform"
-rank_weight_k=1e-3
 
 # Weighted Retraining
 query_budget=500
@@ -24,10 +23,10 @@ n_retrain_epochs=0.1
 n_init_retrain_epochs=1
 result_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/results/debug_00/"
 sd_vae_path="stabilityai/stable-diffusion-3.5-medium"
-latent_vae_config_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/models/latent_vae/configs/sd3m_to_128d.json"
+latent_vae_config_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/models/latent_vae/configs/sd35m_to_128d.json"
 predictor_attr_file="/home/ma/ma_ma/ma_mgraevin/pfs5wor7/ma_mgraevin-optdif/models/classifier/celeba_smile/attributes.json"
-predictor_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/models/classifier/celeba_smile/predictor_128.pth.tar"
-scaled_predictor_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/models/classifier/celeba_smile/predictor_128_scaled3.pth.tar"
+predictor_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/models/classifier/celeba_smile/predictor_128_scaled3.pth.tar"
+scaled_predictor=True
 
 # DNGO
 n_out=5
@@ -69,7 +68,7 @@ python /home/ma/ma_ma/ma_mgraevin/pfs5wor7/ma_mgraevin-optdif/src/lso.py \
     --sd_vae_path $sd_vae_path \
     --latent_vae_config_path $latent_vae_config_path \
     --predictor_path $predictor_path \
-    --scaled_predictor_path $scaled_predictor_path \
+    --scaled_predictor $scaled_predictor \
     --predictor_attr_file $predictor_attr_file \
     --n_out $n_out \
     --n_starts $n_starts \
@@ -78,5 +77,8 @@ python /home/ma/ma_ma/ma_mgraevin/pfs5wor7/ma_mgraevin-optdif/src/lso.py \
     --n_best_points $n_best_points \
     --sample_distribution $sample_distribution \
     --opt_method $opt_method \
+    --opt_constraint_threshold $opt_constraint_threshold \
+    --opt_constraint_strategy $opt_constraint_strategy \
+    --n_gmm_components $n_gmm_components \
     --sparse_out $sparse_out \
     "$@"

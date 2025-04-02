@@ -42,7 +42,7 @@ def add_wr_args(parser):
     wr_group.add_argument("--latent_vae_config_path", type=str, required=True, help="path to the config file of the latent VAE")
     wr_group.add_argument("--latent_vae_ckpt_path", type=str, default=None, help="path to pretrained latent VAE model to use")
     wr_group.add_argument("--predictor_path", type=str, default=None, help="path to pretrained predictor to use")
-    wr_group.add_argument("--scaled_predictor_path", type=str, default=None, help="path to temperature scaled pretrained predictor to use")
+    wr_group.add_argument("--scaled_predictor", type=bool, default=False, help="whether the predictor is scaled")
     wr_group.add_argument("--predictor_attr_file", type=str, default=None, help="path to attribute file of the predictor")
     wr_group.add_argument("--n_retrain_epochs", type=float, default=1., help="number of epochs to retrain for")
     wr_group.add_argument("--n_init_retrain_epochs", type=float, default=None, help="None to use n_retrain_epochs, 0.0 to skip init retrain")
@@ -90,7 +90,7 @@ def _run_command(command, command_name):
     logger.debug(f"{command_name} done in {time.time() - start_time:.1f}s")
 
 
-def retrain_vae(latent_vae, datamodule, save_dir, version_str, num_epochs, device):
+def _retrain_latent_vae(latent_vae, datamodule, save_dir, version_str, num_epochs, device):
 
     # Make sure logs don't get in the way of progress bars
     pl._logger.setLevel(logging.CRITICAL)
@@ -416,7 +416,7 @@ def main_loop(args):
     predictor = SmileClassifier(
         model_path=args.predictor_path,
         attr_file=args.predictor_attr_file,
-        scaled_model_path=args.scaled_predictor_path,
+        scaled=args.scaled_predictor,
         device=args.device,
         logfile=result_dir / "predictor.log",
     )
@@ -478,7 +478,7 @@ def main_loop(args):
                 retrain_dir = result_dir / "retraining"
                 version = f"retrain_{samples_so_far}"
                 # default: run through 10% of the weighted training data in retraining epoch
-                retrain_vae(
+                _retrain_latent_vae(
                     latent_vae, datamodule, retrain_dir, version, num_epochs, args.device
                 )
 
