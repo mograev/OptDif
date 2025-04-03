@@ -15,7 +15,7 @@
     "lossconfig": {
         "target": "src.models.modules.losses.SimpleVAELoss",
         "params": {
-            "beta": 0.01
+            "beta": 0.001
         }
     },
     "embed_dim": 128

@@ -4,6 +4,9 @@ data/ffhq/pt_images/
 data/ffhq/sd_latents/
 data/ffhq/ffhq-dataset-v2.json
 models/classifier/
+models/latent_vae/*
+!models/latent_vae/configs/
+!models/latent_vae/configs/**
 __pycache__/
 *.pyc
 *.pyo
