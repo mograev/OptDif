@@ -125,7 +125,7 @@ class LatentVAE(pl.LightningModule):
         x = batch
         # Latents are already in the right format (B, C, H, W), so we just ensure correct dtype
         return x.to(memory_format=torch.contiguous_format).float()
-
+    
     def training_step(self, batch, batch_idx):
         inputs = self.get_input(batch)
         reconstructions, posterior = self(inputs)

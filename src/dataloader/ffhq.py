@@ -5,6 +5,7 @@ Weighted DataModule for the FFHQ dataset
 import json
 
 from torch.utils.data import DataLoader, WeightedRandomSampler
+from torchvision import transforms
 import pytorch_lightning as pl
 import numpy as np
 
@@ -14,7 +15,7 @@ from src.dataloader.utils import MultiModeDataset
 class FFHQWeightedDataset(pl.LightningDataModule):
     """DataModule class for the FFHQ dataset with weighted sampling with support for multiple tensor modes."""
 
-    def __init__(self, args, data_weighter):
+    def __init__(self, args, data_weighter, encoder=None):
         """
         Initialize the FFHQWeightedDataset class.
         Args:
@@ -55,6 +56,20 @@ class FFHQWeightedDataset(pl.LightningDataModule):
         # Current mode for accessing data
         self.mode = self.default_mode
 
+        # Whether to perform image augmentation
+        self.aug = args.aug
+        if self.aug:
+            self.transform = transforms.Compose([
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomResizedCrop(size=256, scale=(0.8, 1.0))
+            ])
+        else:
+            self.transform = None
+
+        # Encoder for encoding images
+        self.encoder = encoder
+        self.device = args.device
+
         # Setup the dataset
         self._setup()
 
@@ -71,6 +86,8 @@ class FFHQWeightedDataset(pl.LightningDataModule):
         data_group.add_argument("--batch_size", type=int, default=128)
         data_group.add_argument("--num_workers", type=int, default=4)
         data_group.add_argument("--val_split", type=float, default=0.)
+        data_group.add_argument("--aug", action='store_true', default=False)
+        data_group.add_argument("--device", type=str, default='cpu')
 
         return parent_parser
 
@@ -114,12 +131,18 @@ class FFHQWeightedDataset(pl.LightningDataModule):
         self.train_dataset = MultiModeDataset(
             filename_list=self.data_train,
             mode_dirs=self.mode_dirs,
-            default_mode=self.default_mode
+            default_mode=self.default_mode,
+            transform=self.transform,
+            encoder=self.encoder,
+            device=self.device
         )
         self.val_dataset = MultiModeDataset(
             filename_list=self.data_val,
             mode_dirs=self.mode_dirs,
-            default_mode=self.default_mode
+            default_mode=self.default_mode,
+            transform=self.transform,
+            encoder=self.encoder,
+            device=self.device
         )
         
         # Set weights for sampling
@@ -208,7 +231,10 @@ class FFHQWeightedDataset(pl.LightningDataModule):
         self.train_dataset = MultiModeDataset(
             filename_list=self.data_train,
             mode_dirs=self.mode_dirs,
-            default_mode=self.default_mode
+            default_mode=self.default_mode,
+            transform=self.transform,
+            encoder=self.encoder,
+            device=self.device
         )
 
         # Set weights

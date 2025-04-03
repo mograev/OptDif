@@ -1,4 +1,11 @@
-# Script to run LatentVAE training on the FFHQ dataset
+#!/bin/bash
+
+#SBATCH --job-name=train_latent_vae            # Job name
+#SBATCH --output=logs/train_latent_vae_%j.out  # Output log file
+#SBATCH --error=logs/train_latent_vae_%j.err   # Error log file
+#SBATCH --time=08:00:00                        # Maximum runtime (hh:mm:ss)
+#SBATCH --partition=gpu_4                      # Partition to submit the job to
+#SBATCH --gres=gpu                             # Request GPU resources
 
 # Dataloader
 img_dir="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/data/ffhq/images1024x1024"
@@ -7,8 +14,9 @@ attr_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/data/ffhq/ffhq_smile_
 max_property_value=5
 min_property_value=0
 batch_size=128
-num_workers=4
+num_workers=8
 val_split=0.1
+device="cuda"
 
 # Weighter
 weight_type="uniform"
@@ -19,8 +27,8 @@ eval "$(conda shell.bash hook)"
 # Activate the conda environment
 conda activate optdif1
 
-# Run the Python script with specified arguments
-python /home/ma/ma_ma/ma_mgraevin/pfs5wor7/ma_mgraevin-optdif/src/run/train_latent_vae_ffhq.py \
+# Run the Python script with specified arguments (using srun for SLURM)
+srun python /home/ma/ma_ma/ma_mgraevin/pfs5wor7/ma_mgraevin-optdif/src/run/train_latent_vae_ffhq.py \
     --img_dir $img_dir \
     --img_tensor_dir $img_tensor_dir \
     --attr_path $attr_path \
@@ -30,4 +38,6 @@ python /home/ma/ma_ma/ma_mgraevin/pfs5wor7/ma_mgraevin-optdif/src/run/train_late
     --num_workers $num_workers \
     --val_split $val_split \
     --weight_type $weight_type \
+    --device $device \
+    --aug
     "$@"

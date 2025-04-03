@@ -54,7 +54,7 @@ class MultiModeDataset(Dataset):
     Implements a dataset that can switch between different representations
     (e.g., images and latents) based on the same filenames
     """
-    def __init__(self, filename_list, mode_dirs=None, default_mode='img'):
+    def __init__(self, filename_list, mode_dirs=None, default_mode='img', transform=None, encoder=None, device='cpu'):
         """
         Args:
             filename_list: List of filenames (without extension)
@@ -63,6 +63,11 @@ class MultiModeDataset(Dataset):
         """
         self.filename_list = filename_list
         self.mode_dirs = mode_dirs or {}
+        self.transform = transform
+        self.device = device
+        self.encoder = encoder
+        self.encoder.eval()
+        self.encoder.to(self.device)
         
         if not self.mode_dirs and default_mode != 'direct':
             raise ValueError("No mode directories provided. Set default_mode='direct' to load directly from filenames.")
@@ -116,6 +121,16 @@ class MultiModeDataset(Dataset):
 
             # Try loading from the path
             file = torch.load(path, weights_only=False)
+
+            # Potentially apply transformations and encoding to images
+            if self.mode == 'img' or self.mode == 'img_tensor':
+                if self.transform:
+                    file = self.transform(file)
+                if self.encoder:
+                    with torch.no_grad():
+                        file = file.unsqueeze(0).to(self.device)
+                        file = self.encoder.encode(file).latent_dist.sample()
+                        file = file.squeeze(0).cpu()
 
             return file
             
