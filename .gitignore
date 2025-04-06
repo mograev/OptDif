@@ -7,6 +7,9 @@ models/classifier/
 models/latent_vae/*
 !models/latent_vae/configs/
 !models/latent_vae/configs/**
+models/latent_autoencoder/*
+!models/latent_autoencoder/configs/
+!models/latent_autoencoder/configs/**
 __pycache__/
 *.pyc
 *.pyo
