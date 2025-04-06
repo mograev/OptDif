@@ -1,11 +1,11 @@
 #!/bin/bash
 
-#SBATCH --job-name=train_latent_vae            # Job name
-#SBATCH --output=logs/train_latent_vae_%j.out  # Output log file
-#SBATCH --error=logs/train_latent_vae_%j.err   # Error log file
-#SBATCH --time=08:00:00                        # Maximum runtime (hh:mm:ss)
-#SBATCH --partition=gpu_4                      # Partition to submit the job to
-#SBATCH --gres=gpu                             # Request GPU resources
+#SBATCH --job-name=train_latent_vae                 # Job name
+#SBATCH --output=logs/train_latent_vae_512d_%j.out  # Output log file
+#SBATCH --error=logs/train_latent_vae_512d_%j.err   # Error log file
+#SBATCH --time=12:00:00                             # Maximum runtime (hh:mm:ss)
+#SBATCH --partition=gpu_4_h100                      # Partition to submit the job to
+#SBATCH --gres=gpu                                  # Request GPU resources
 
 # Dataloader
 img_dir="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/data/ffhq/images1024x1024"

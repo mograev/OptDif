@@ -1,4 +1,4 @@
-import json
+import yaml
 import argparse
 import logging
 
@@ -14,6 +14,10 @@ from diffusers import AutoencoderKL
 # Set the multiprocessing start method to spawn
 import torch.multiprocessing as mp
 
+# Set the float32 matmul precision to medium
+# This is important for compatibility with certain hardware and software configurations
+torch.set_float32_matmul_precision("medium")
+
 if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
 
@@ -24,11 +28,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Direct arguments
-    args.sd_latent_dir="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/data/ffhq/sd_latents"
     args.seed=42
     args.max_epochs=100
     args.model_output_dir="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/models/latent_vae"
-    args.latent_vae_config_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/models/latent_vae/configs/sd35m_to_128d.json"
+    args.latent_vae_config_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/models/latent_vae/configs/sd35m_to_512d.yaml"
 
     # Seed everything
     pl.seed_everything(args.seed)
@@ -43,7 +46,7 @@ if __name__ == "__main__":
 
     # Load latent VAE config
     with open(args.latent_vae_config_path, "r") as f:
-        latent_vae_config = json.load(f)
+        latent_vae_config = yaml.safe_load(f)
 
     # Initialize LatentVAE model
     latent_vae = LatentVAE(
@@ -60,7 +63,7 @@ if __name__ == "__main__":
     # TensorBoard logger to log training progress
     tb_logger = pl.loggers.TensorBoardLogger(
         save_dir=args.model_output_dir,
-        version="version_5",
+        version="version_9",
         name="",
     )
 
