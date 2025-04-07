@@ -14,7 +14,4 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
-.conda/
-.vscode/
-.vscode-server/
 logs/
