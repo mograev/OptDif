@@ -13,17 +13,12 @@ class LitVAE(pl.LightningModule):
 
         # store model
         self.model = model
-        
-        # extract hyperparameters from diffusers vae config
-        self.config = model.config
-        self.scaling_factor = self.config["scaling_factor"]
-        self.shift_factor = self.config["shift_factor"]
 
     def forward(self, x):
         # 1. Encode
         latents = self.model.encode(x).latent_dist
         # 2. Sample
-        z = latents.sample() * self.scaling_factor + self.shift_factor
+        z = latents.sample()
         # 3. Decode
         recon = self.model.decode(z).sample
         return recon, latents
@@ -46,9 +41,9 @@ class LitVAE(pl.LightningModule):
 
         # Log losses
         self.log_dict({
-            "train_loss": loss,
-            "recon_loss": recon_loss,
-            "kl_loss": kl_loss
+            "train_total_loss": loss,
+            "train_recon_loss": recon_loss,
+            "train_kl_loss": kl_loss
         })
 
         return loss
@@ -74,7 +69,7 @@ class LitVAE(pl.LightningModule):
 
         # Log losses
         self.log_dict({
-            "val_loss": loss,
+            "val_total_loss": loss,
             "val_recon_loss": recon_loss,
             "val_kl_loss": kl_loss
         }, prog_bar=True)
