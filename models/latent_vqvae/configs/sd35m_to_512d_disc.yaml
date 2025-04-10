@@ -1,0 +1,33 @@
+ddconfig:
+    double_z: false
+    z_channels: 8
+    resolution: 32
+    in_channels: 16
+    out_ch: 16
+    ch: 64
+    ch_mult: [1, 2, 2]
+    num_res_blocks: 2
+    attn_resolutions: []
+    dropout: 0.0
+    attn_type: "none"
+embedconfig:
+    n_embed: 1024
+    embed_dim: 512
+lossconfig:
+    target: "src.models.modules.losses.VQLPIPSWithDiscriminator"
+    params:
+        disc_start: 10000
+        codebook_weight: 0.25
+        pixelloss_weight: 1.5
+        disc_num_layers: 4
+        disc_in_channels: 3
+        disc_factor: 0.5
+        disc_weight: 1.0
+        perceptual_weight: 1.0
+        use_actnorm: true
+        disc_conditional: true
+        disc_ndf: 64
+        disc_loss: "hinge"
+        n_classes: null
+        perceptual_loss: "lpips"
+        pixel_loss: "l1"

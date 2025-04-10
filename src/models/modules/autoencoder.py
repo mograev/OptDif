@@ -1,3 +1,8 @@
+"""
+Autoencoder modules used in Stable Diffusion models.
+Source: https://github.com/Stability-AI/stablediffusion/blob/main/ldm/modules/diffusionmodules/model.py
+"""
+
 import torch
 import torch.nn as nn
 import numpy as np
@@ -6,16 +11,24 @@ from src.models.modules.attention import LinearAttention
 
 
 def nonlinearity(x):
-    # swish
+    """Swish activation function."""
     return x*torch.sigmoid(x)
 
 
 def Normalize(in_channels, num_groups=32):
+    """Group normalization layer."""
     return torch.nn.GroupNorm(num_groups=num_groups, num_channels=in_channels, eps=1e-6, affine=True)
 
 
 class Upsample(nn.Module):
+    """Upsample layer."""
     def __init__(self, in_channels, with_conv):
+        """
+        Initialize the Upsample layer.
+        Args:
+            in_channels (int): Number of input channels.
+            with_conv (bool): Whether to use a convolutional layer after upsampling.
+        """
         super().__init__()
         self.with_conv = with_conv
         if self.with_conv:
@@ -26,6 +39,7 @@ class Upsample(nn.Module):
                                         padding=1)
 
     def forward(self, x):
+        """Forward pass of the Upsample layer."""
         x = torch.nn.functional.interpolate(x, scale_factor=2.0, mode="nearest")
         if self.with_conv:
             x = self.conv(x)
@@ -34,6 +48,12 @@ class Upsample(nn.Module):
 
 class Downsample(nn.Module):
     def __init__(self, in_channels, with_conv):
+        """
+        Initialize the Downsample layer.
+        Args:
+            in_channels (int): Number of input channels.
+            with_conv (bool): Whether to use a convolutional layer after downsampling.
+        """
         super().__init__()
         self.with_conv = with_conv
         if self.with_conv:
@@ -45,6 +65,7 @@ class Downsample(nn.Module):
                                         padding=0)
 
     def forward(self, x):
+        """Forward pass of the Downsample layer."""
         if self.with_conv:
             pad = (0,1,0,1)
             x = torch.nn.functional.pad(x, pad, mode="constant", value=0)
@@ -54,10 +75,19 @@ class Downsample(nn.Module):
         return x
 
 
-
 class ResnetBlock(nn.Module):
+    """Residual block with normalization and convolutional layers."""
     def __init__(self, *, in_channels, out_channels=None, conv_shortcut=False,
                  dropout, temb_channels=512):
+        """
+        Initialize the ResnetBlock.
+        Args:
+            in_channels (int): Number of input channels.
+            out_channels (int): Number of output channels. If None, set to in_channels.
+            conv_shortcut (bool): Whether to use a convolutional shortcut.
+            dropout (float): Dropout rate.
+            temb_channels (int): Number of channels for the time embedding.
+        """
         super().__init__()
         self.in_channels = in_channels
         out_channels = in_channels if out_channels is None else out_channels
@@ -95,6 +125,14 @@ class ResnetBlock(nn.Module):
                                                     padding=0)
 
     def forward(self, x, temb):
+        """
+        Forward pass of the ResnetBlock.
+        Args:
+            x (torch.Tensor): Input tensor.
+            temb (torch.Tensor): Time embedding tensor.
+        Returns:
+            torch.Tensor: Output tensor.
+        """
         h = x
         h = self.norm1(h)
         h = nonlinearity(h)
@@ -119,13 +157,24 @@ class ResnetBlock(nn.Module):
 
 
 class LinAttnBlock(LinearAttention):
-    """to match AttnBlock usage"""
+    """Linear attention block."""
     def __init__(self, in_channels):
+        """
+        Initialize the LinAttnBlock.
+        Args:
+            in_channels (int): Number of input channels.
+        """
         super().__init__(dim=in_channels, heads=1, dim_head=in_channels)
 
 
 class AttnBlock(nn.Module):
+    """Vanilla attention block."""
     def __init__(self, in_channels):
+        """
+        Initialize the AttnBlock.
+        Args:
+            in_channels (int): Number of input channels.
+        """
         super().__init__()
         self.in_channels = in_channels
 
@@ -151,8 +200,8 @@ class AttnBlock(nn.Module):
                                         stride=1,
                                         padding=0)
 
-
     def forward(self, x):
+        """Forward pass of the AttnBlock."""
         h_ = x
         h_ = self.norm(h_)
         q = self.q(h_)
@@ -180,6 +229,14 @@ class AttnBlock(nn.Module):
 
 
 def make_attn(in_channels, attn_type="vanilla"):
+    """
+    Factory function to create an attention block.
+    Args:
+        in_channels (int): Number of input channels.
+        attn_type (str): Type of attention block to create. Options are "vanilla", "linear", or "none".
+    Returns:
+        nn.Module: Attention block.
+    """
     assert attn_type in ["vanilla", "linear", "none"], f'attn_type {attn_type} unknown'
     print(f"making attention of type '{attn_type}' with {in_channels} in_channels")
     if attn_type == "vanilla":
@@ -190,12 +247,29 @@ def make_attn(in_channels, attn_type="vanilla"):
         return LinAttnBlock(in_channels)
 
 
-
 class Encoder(nn.Module):
+    """Encoder module for the autoencoder."""
     def __init__(self, *, ch, out_ch, ch_mult=(1,2,4,8), num_res_blocks,
                  attn_resolutions, dropout=0.0, resamp_with_conv=True, in_channels,
                  resolution, z_channels, double_z=True, use_linear_attn=False, attn_type="vanilla",
                  **ignore_kwargs):
+        """
+        Initialize the Encoder.
+        Args:
+            ch (int): Number of channels.
+            out_ch (int): Number of output channels.
+            ch_mult (tuple): Channel multipliers for each resolution.
+            num_res_blocks (int): Number of residual blocks.
+            attn_resolutions (list): Resolutions at which to apply attention.
+            dropout (float): Dropout rate.
+            resamp_with_conv (bool): Whether to use a convolutional layer for downsampling.
+            in_channels (int): Number of input channels.
+            resolution (int): Input resolution.
+            z_channels (int): Number of channels in the latent space.
+            double_z (bool): Whether to double the number of channels in the latent space.
+            use_linear_attn (bool): Whether to use linear attention.
+            attn_type (str): Type of attention block to use. Options are "vanilla", "linear", or "none".
+        """
         super().__init__()
         if use_linear_attn: attn_type = "linear"
         self.ch = ch
@@ -258,6 +332,7 @@ class Encoder(nn.Module):
                                         padding=1)
 
     def forward(self, x):
+        """Forward pass of the Encoder."""
         # timestep embedding
         temb = None
 
@@ -287,10 +362,29 @@ class Encoder(nn.Module):
 
 
 class Decoder(nn.Module):
+    """Decoder module for the autoencoder."""
     def __init__(self, *, ch, out_ch, ch_mult=(1,2,4,8), num_res_blocks,
                  attn_resolutions, dropout=0.0, resamp_with_conv=True, in_channels,
                  resolution, z_channels, give_pre_end=False, tanh_out=False, use_linear_attn=False,
                  attn_type="vanilla", **ignorekwargs):
+        """
+        Initialize the Decoder.
+        Args:
+            ch (int): Number of channels.
+            out_ch (int): Number of output channels.
+            ch_mult (tuple): Channel multipliers for each resolution.
+            num_res_blocks (int): Number of residual blocks.
+            attn_resolutions (list): Resolutions at which to apply attention.
+            dropout (float): Dropout rate.
+            resamp_with_conv (bool): Whether to use a convolutional layer for upsampling.
+            in_channels (int): Number of input channels.
+            resolution (int): Input resolution.
+            z_channels (int): Number of channels in the latent space.
+            give_pre_end (bool): Whether to return the output before the final layer.
+            tanh_out (bool): Whether to apply tanh activation to the output.
+            use_linear_attn (bool): Whether to use linear attention.
+            attn_type (str): Type of attention block to use. Options are "vanilla", "linear", or "none".
+        """
         super().__init__()
         if use_linear_attn: attn_type = "linear"
         self.ch = ch
@@ -360,6 +454,7 @@ class Decoder(nn.Module):
                                         padding=1)
 
     def forward(self, z):
+        """Forward pass of the Decoder."""
         #assert z.shape[1:] == self.z_shape[1:]
         self.last_z_shape = z.shape
 

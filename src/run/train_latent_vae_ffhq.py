@@ -7,7 +7,7 @@ import pytorch_lightning as pl
 
 from src.dataloader.ffhq import FFHQWeightedDataset
 from src.dataloader.weighting import DataWeighter
-from src.models.latent_vae import LatentVAE
+from src.models.latent_models import LatentVAE
 
 from diffusers import AutoencoderKL
 
