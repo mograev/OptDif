@@ -4,9 +4,11 @@ Source (SimpleFilenameToTensorDataset): https://github.com/janschwedhelm/master-
 """
 
 import os
+from PIL import Image
 
 import torch
 from torch.utils.data import Dataset
+from torchvision import transforms
 
 
 class SimpleFilenameToTensorDataset(Dataset):
@@ -40,7 +42,7 @@ class SimpleFilenameToTensorDataset(Dataset):
             tensor_file = torch.load(path, weights_only=False)
         except Exception as e:
             # Fallback to loading directly from filename
-            tensor_file = torch.load(filename)
+            tensor_file = torch.load(filename, weights_only=False)
             
         # Return tensor
         return tensor_file
@@ -60,14 +62,22 @@ class MultiModeDataset(Dataset):
             filename_list: List of filenames (without extension)
             mode_dirs: Dict mapping modes to directories, e.g., {'image': '/path/to/images', 'latent': '/path/to/latents'}
             default_mode: Default mode to use ('image', 'latent', etc.)
+            transform: Optional transformation to apply to the images
+            encoder: Optional encoder to use for encoding images
+            device: Device to load the encoder onto ('cpu' or 'cuda')
         """
         self.filename_list = filename_list
         self.mode_dirs = mode_dirs or {}
         self.transform = transform
         self.device = device
-        self.encoder = encoder
-        self.encoder.eval()
-        self.encoder.to(self.device)
+        if encoder:
+            self.do_encode = True
+            self.encoder = encoder
+            self.encoder.eval()
+            self.encoder.to(self.device)
+        else:
+            self.do_encode = False
+            self.encoder = None
         
         if not self.mode_dirs and default_mode != 'direct':
             raise ValueError("No mode directories provided. Set default_mode='direct' to load directly from filenames.")
@@ -114,23 +124,34 @@ class MultiModeDataset(Dataset):
         try:
             if self.mode == 'img':
                 path = os.path.join(mode_dir, f"{name_without_ext}.png")
-            elif self.mode == 'img_tensor' or self.mode == 'sd_latent':
+                file = Image.open(path).convert("RGB")
+                file = transforms.ToTensor()(file)
+            elif self.mode == 'img_tensor':
                 path = os.path.join(mode_dir, f"{name_without_ext}.pt")
+                file = torch.load(path, weights_only=False)
             else:
                 path = os.path.join(filename)
+                file = torch.load(path, weights_only=False)
 
-            # Try loading from the path
-            file = torch.load(path, weights_only=False)
+            # debugging
+            # print(f"Loading {self.mode} from {path}")
+            # print cuda memory usage
+
 
             # Potentially apply transformations and encoding to images
             if self.mode == 'img' or self.mode == 'img_tensor':
                 if self.transform:
                     file = self.transform(file)
-                if self.encoder:
+                if self.do_encode:
                     with torch.no_grad():
                         file = file.unsqueeze(0).to(self.device)
                         file = self.encoder.encode(file).latent_dist.sample()
                         file = file.squeeze(0).cpu()
+
+            # Move tensor to the specified device
+            #file = file.to(self.device)
+            # print("File loaded to device:", file.device)
+            # print(f"CUDA Memory Allocated: {torch.cuda.memory_allocated() / (1024 ** 2)} MB")
 
             return file
             

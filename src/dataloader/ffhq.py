@@ -21,6 +21,7 @@ class FFHQWeightedDataset(pl.LightningDataModule):
         Args:
             args (argparse.Namespace): Command line arguments.
             data_weighter (object): DataWeighter object for weighting the dataset.
+            encoder (object): Encoder object for encoding images.
         """
 
         super().__init__()
@@ -68,7 +69,7 @@ class FFHQWeightedDataset(pl.LightningDataModule):
 
         # Encoder for encoding images
         self.encoder = encoder
-        self.device = args.device
+        self.device = args.data_device
 
         # Setup the dataset
         self._setup()
@@ -86,8 +87,8 @@ class FFHQWeightedDataset(pl.LightningDataModule):
         data_group.add_argument("--batch_size", type=int, default=128)
         data_group.add_argument("--num_workers", type=int, default=4)
         data_group.add_argument("--val_split", type=float, default=0.)
+        data_group.add_argument("--data_device", type=str, default='cpu')
         data_group.add_argument("--aug", action='store_true', default=False)
-        data_group.add_argument("--device", type=str, default='cpu')
 
         return parent_parser
 
@@ -144,6 +145,7 @@ class FFHQWeightedDataset(pl.LightningDataModule):
             encoder=self.encoder,
             device=self.device
         )
+
         
         # Set weights for sampling
         self.set_weights()
@@ -247,7 +249,8 @@ class FFHQWeightedDataset(pl.LightningDataModule):
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             sampler=self.train_sampler,
-            drop_last=False
+            drop_last=False,
+            persistent_workers=True if self.num_workers > 0 else False,
         )
 
     def val_dataloader(self):
@@ -257,5 +260,6 @@ class FFHQWeightedDataset(pl.LightningDataModule):
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             sampler=self.val_sampler,
-            drop_last=False
+            drop_last=False,
+            persistent_workers=True if self.num_workers > 0 else False,
         )
