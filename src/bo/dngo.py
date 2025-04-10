@@ -1,3 +1,13 @@
+"""
+Deep Networks for Global Optimization. This module performs bayesian linear regression with basis function
+extracted from a feed forward neural network.
+Reference: [1] J. Snoek, O. Rippel, K. Swersky, R. Kiros, N. Satish,
+            N. Sundaram, M.~M.~A. Patwary, Prabhat, R.~P. Adams
+            Scalable Bayesian Optimization Using Deep Neural Networks
+            Proc. of ICML'15
+Code Source: https://github.com/janschwedhelm/master-thesis/blob/main/src/dngo/dngo.py
+"""
+
 import time
 import logging
 import numpy as np
@@ -9,13 +19,22 @@ import torch.optim as optim
 
 from scipy import optimize
 
-from src.dngo.base_model import BaseModel
-from src.dngo.util.normalization import zero_mean_unit_var_normalization, zero_mean_unit_var_denormalization
-from src.dngo.bayesian_linear_regression import BayesianLinearRegression, Prior
+from src.bo.base_model import BaseModel
+from src.bo.util.normalization import zero_mean_unit_var_normalization, zero_mean_unit_var_denormalization
+from src.bo.bayesian_linear_regression import BayesianLinearRegression, Prior
 
 
 class Net(nn.Module):
+    """
+    Feed forward neural network with 3 hidden layers and tanh activation function.
+    """
     def __init__(self, n_inputs, n_units=[50, 50, 50]):
+        """
+        Initializes the neural network.
+        Args:
+            n_inputs (int): Number of input features
+            n_units (list): Number of units in each hidden layer
+        """
         super(Net, self).__init__()
         self.fc1 = nn.Linear(n_inputs, n_units[0])
         self.fc2 = nn.Linear(n_units[0], n_units[1])
@@ -23,6 +42,13 @@ class Net(nn.Module):
         self.out = nn.Linear(n_units[2], 1)
 
     def forward(self, x):
+        """
+        Forward pass through the network.
+        Args:
+            x (torch.Tensor): Input tensor
+        Returns:
+            torch.Tensor: Output tensor
+        """
         x = torch.tanh(self.fc1(x))
         x = torch.tanh(self.fc2(x))
         x = torch.tanh(self.fc3(x))
@@ -30,6 +56,13 @@ class Net(nn.Module):
         return self.out(x)
 
     def basis_funcs(self, x):
+        """
+        Computes the basis functions for the input data.
+        Args:
+            x (torch.Tensor): Input tensor
+        Returns:
+            torch.Tensor: Output tensor
+        """
         x = torch.tanh(self.fc1(x))
         x = torch.tanh(self.fc2(x))
         x = torch.tanh(self.fc3(x))
@@ -38,6 +71,7 @@ class Net(nn.Module):
 
 
 class DNGO(BaseModel):
+    """Deep Networks for Global Optimization (DNGO) model."""
 
     def __init__(self, batch_size=10, num_epochs=50,
                  learning_rate=0.01,
@@ -46,50 +80,26 @@ class DNGO(BaseModel):
                  n_hypers=20, chain_length=2000, burnin_steps=2000,
                  normalize_input=True, normalize_output=True, rng=None):
         """
-        Deep Networks for Global Optimization [1]. This module performs
-        Bayesian Linear Regression with basis function extracted from a
-        feed forward neural network.
-        [1] J. Snoek, O. Rippel, K. Swersky, R. Kiros, N. Satish,
-            N. Sundaram, M.~M.~A. Patwary, Prabhat, R.~P. Adams
-            Scalable Bayesian Optimization Using Deep Neural Networks
-            Proc. of ICML'15
-        Parameters
-        ----------
-        batch_size: int
-            Batch size for training the neural network
-        num_epochs: int
-            Number of epochs for training
-        learning_rate: float
-            Initial learning rate for Adam
-        adapt_epoch: int
-            Defines after how many epochs the learning rate will be decayed by a factor 10
-        n_units_1: int
-            Number of units in layer 1
-        n_units_2: int
-            Number of units in layer 2
-        n_units_3: int
-            Number of units in layer 3
-        alpha: float
-            Hyperparameter of the Bayesian linear regression
-        beta: float
-            Hyperparameter of the Bayesian linear regression
-        prior: Prior object
-            Prior for alpa and beta. If set to None the default prior is used
-        do_mcmc: bool
-            If set to true different values for alpha and beta are sampled via MCMC from the marginal log likelihood
-            Otherwise the marginal log likehood is optimized with scipy fmin function
-        n_hypers : int
-            Number of samples for alpha and beta
-        chain_length : int
-            The chain length of the MCMC sampler
-        burnin_steps: int
-            The number of burnin steps before the sampling procedure starts
-        normalize_output : bool
-            Zero mean unit variance normalization of the output values
-        normalize_input : bool
-            Zero mean unit variance normalization of the input values
-        rng: np.random.RandomState
-            Random number generator
+        Initializes the DNGO model.
+        Args:
+            batch_size (int): Batch size for training the neural network
+            num_epochs (int): Number of epochs for training
+            learning_rate (float): Initial learning rate for Adam
+            adapt_epoch (int): Defines after how many epochs the learning rate will be decayed by a factor 10
+            n_units_1 (int): Number of units in layer 1
+            n_units_2 (int): Number of units in layer 2
+            n_units_3 (int): Number of units in layer 3
+            alpha (float): Hyperparameter of the Bayesian linear regression
+            beta (float): Hyperparameter of the Bayesian linear regression
+            prior (Prior object): Prior for alpa and beta. If set to None the default prior is used
+            do_mcmc (bool): If set to true different values for alpha and beta are sampled via MCMC from the marginal log likelihood
+                            Otherwise the marginal log likehood is optimized with scipy fmin function
+            n_hypers (int): Number of samples for alpha and beta
+            chain_length (int): The chain length of the MCMC sampler
+            burnin_steps (int): The number of burnin steps before the sampling procedure starts
+            normalize_output (bool): Zero mean unit variance normalization of the output values
+            normalize_input (bool): Zero mean unit variance normalization of the input values
+            rng (np.random.RandomState): Random number generator
         """
 
         if rng is None:
@@ -133,16 +143,11 @@ class DNGO(BaseModel):
     def train(self, X, y, do_optimize=True):
         """
         Trains the model on the provided data.
-        Parameters
-        ----------
-        X: np.ndarray (N, D)
-            Input data points. The dimensionality of X is (N, D),
-            with N as the number of points and D is the number of features.
-        y: np.ndarray (N,)
-            The corresponding target values.
-        do_optimize: boolean
-            If set to true the hyperparameters are optimized otherwise
-            the default hyperparameters are used.
+        Args:
+            X (np.ndarray): Input data points. The dimensionality of X is (N, D),
+                with N as the number of points and D is the number of input dimensions.
+            y (np.ndarray): The corresponding target values of the input data points.
+            do_optimize (bool): If True, optimize hyperparameters, otherwise sample them
         """
         start_time = time.time()
 
@@ -262,14 +267,10 @@ class DNGO(BaseModel):
         """
         Log likelihood of the data marginalised over the weights w. See chapter 3.5 of
         the book by Bishop of an derivation.
-        Parameters
-        ----------
-        theta: np.array(2,)
-            The hyperparameter alpha and beta on a log scale
-        Returns
-        -------
-        float
-            lnlikelihood + prior
+        Args:
+            theta (np.ndarray): Hyperparameters of the Bayesian linear regression
+        Returns:
+            float: The marginal log likelihood
         """
         if np.any(theta == np.inf):
             return -np.inf
@@ -307,19 +308,27 @@ class DNGO(BaseModel):
     def negative_mll(self, theta):
         """
         Returns the negative marginal log likelihood (for optimizing it with scipy).
-        Parameters
-        ----------
-        theta: np.array(2,)
-            The hyperparameter alpha and beta on a log scale
-        Returns
-        -------
-        float
-            negative lnlikelihood + prior
+        Args:
+            theta (np.ndarray): Hyperparameters of the Bayesian linear regression
+        Returns:
+            float: The negative marginal log likelihood
         """
         nll = -self.marginal_log_likelihood(theta)
         return nll
 
     def iterate_minibatches(self, inputs, targets, batchsize, shuffle=False):
+        """
+        Iterates over the training data in mini-batches of size batchsize.
+        Args:
+            inputs (np.ndarray): Input data points
+            targets (np.ndarray): Target values
+            batchsize (int): Size of each mini-batch
+            shuffle (bool): If True, shuffle the data before creating mini-batches
+        Yields:
+            np.ndarray: Mini-batch of input data points
+            np.ndarray: Mini-batch of target values
+        """
+        # Check if the number of training points is the same as the number of targets
         assert inputs.shape[0] == targets.shape[0], \
             "The number of training points is not the same"
         if shuffle:
@@ -334,19 +343,14 @@ class DNGO(BaseModel):
 
     @BaseModel._check_shapes_predict
     def predict(self, X_test):
-        r"""
+        """
         Returns the predictive mean and variance of the objective function at
         the given test points.
-        Parameters
-        ----------
-        X_test: np.ndarray (N, D)
-            N input test points
-        Returns
-        ----------
-        np.array(N,)
-            predictive mean
-        np.array(N,)
-            predictive variance
+        Args:
+            X_test (np.ndarray): Test data points with shape (N, D)
+        Returns:
+            np.ndarray: Predictive mean of the test data points
+            np.ndarray: Predictive variance of the test data points
         """
         # Normalize inputs
         if self.normalize_input:
@@ -386,12 +390,10 @@ class DNGO(BaseModel):
     def get_incumbent(self):
         """
         Returns the best observed point and its function value
-        Returns
-        ----------
-        incumbent: ndarray (D,)
-            current incumbent
-        incumbent_value: ndarray (N,)
-            the observed value of the incumbent
+        Returns:
+            tuple: incumbent (np.ndarray), incumbent_value (np.ndarray)
+                incumbent: current incumbent
+                incumbent_value: the observed value of the incumbent
         """
 
         inc, inc_value = super(DNGO, self).get_incumbent()

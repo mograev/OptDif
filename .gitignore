@@ -1,8 +1,11 @@
+# Data
 data/ffhq/features/
 data/ffhq/images1024x1024/
 data/ffhq/pt_images/
 data/ffhq/sd_latents/
 data/ffhq/ffhq-dataset-v2.json
+
+# Models
 models/classifier/
 models/latent_vae/*
 !models/latent_vae/configs/
@@ -10,6 +13,14 @@ models/latent_vae/*
 models/latent_autoencoder/*
 !models/latent_autoencoder/configs/
 !models/latent_autoencoder/configs/**
+models/latent_vqvae/*
+!models/latent_vqvae/configs/
+!models/latent_vqvae/configs/**
+
+# Optimization results
+results/
+
+# Cache, Checkpoints, and logs
 __pycache__/
 *.pyc
 *.pyo

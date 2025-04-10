@@ -1,4 +1,7 @@
-""" Code to train DNGO, starting from some initial data """
+"""
+Training DNGO model. Supports MCMC sampling.
+Source: https://github.com/janschwedhelm/master-thesis/blob/main/src/dngo/dngo_train.py
+"""
 
 import logging
 import time
@@ -7,7 +10,7 @@ import numpy as np
 import argparse
 import pytorch_lightning as pl
 
-from src.dngo.dngo import DNGO
+from src.bo.dngo import DNGO
 
 
 # Arguments
@@ -23,6 +26,11 @@ dngo_train_group.add_argument('--do_mcmc', dest="do_mcmc", action="store_true")
 
 
 def dngo_train(args):
+    """
+    Train the DNGO model.
+    Args:
+        args (argparse.Namespace): Command line arguments.
+    """
 
     # Set up logger
     LOGGER = logging.getLogger()

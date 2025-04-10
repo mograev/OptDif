@@ -1,4 +1,8 @@
-""" Code to perform Bayesian Optimization with DNGO """
+"""
+Bayesian Optimization by optimizing the Expected Improvement (EI) using DNGO or GP as surrogate model.
+This script implements a multi-start optimization strategy to find the best points in the latent space.
+Source: https://github.com/janschwedhelm/master-thesis/blob/main/src/gp_opt.py
+"""
 
 import argparse
 import logging
@@ -9,6 +13,8 @@ import time
 import numpy as np
 from scipy.optimize import minimize
 from sklearn.mixture import GaussianMixture
+from sklearn.preprocessing import StandardScaler
+from sklearn.decomposition import PCA
 import torch
 import pytorch_lightning as pl
 
@@ -17,56 +23,79 @@ from src.utils import sparse_subset
 
 # Arguments
 parser = argparse.ArgumentParser()
-dngo_opt_group = parser.add_argument_group("DNGO optimization")
-dngo_opt_group.add_argument("--logfile", type=str, help="file to log to", default="dngo_opt.log")
-dngo_opt_group.add_argument("--seed", type=int, required=True)
-dngo_opt_group.add_argument("--surrogate_file", type=str, required=True, help="path to load pretrained surrogate model from")
-dngo_opt_group.add_argument("--data_file", type=str, help="file to load data from", required=True)
-dngo_opt_group.add_argument("--save_file", type=str, required=True, help="file to save results to")
-dngo_opt_group.add_argument("--n_out", type=int, default=5, help="number of optimization points to return")
-dngo_opt_group.add_argument("--n_starts", type=int, default=20, help="number of optimization runs with different initial values")
-dngo_opt_group.add_argument("--n_samples", type=int, default=10000, help="Number of grid points")
-dngo_opt_group.add_argument("--sample_distribution", type=str, default="normal", help="Distribution which the samples are drawn from.")
-dngo_opt_group.add_argument("--opt_constraint_threshold", type=float, default=None, help="Log-density threshold for optimization constraint")
-dngo_opt_group.add_argument("--opt_constraint_strategy", type=str, default="gmm_fit")
-dngo_opt_group.add_argument("--n_gmm_components", type=int, default=None, help="Number of components used for GMM fitting")
-dngo_opt_group.add_argument("--sparse_out", type=bool, default=True)
-dngo_opt_group.add_argument("--opt_method", type=str, default="SLSQP")
+opt_group = parser.add_argument_group("DNGO optimization")
+opt_group.add_argument("--logfile", type=str, help="file to log to", default="dngo_opt.log")
+opt_group.add_argument("--seed", type=int, required=True)
+opt_group.add_argument("--surrogate_file", type=str, required=True, help="path to load pretrained surrogate model from")
+opt_group.add_argument("--data_file", type=str, help="file to load data from", required=True)
+opt_group.add_argument("--save_file", type=str, required=True, help="file to save results to")
+opt_group.add_argument("--n_out", type=int, default=5, help="Number of points to return from optimization")
+opt_group.add_argument("--n_starts", type=int, default=20, help="Number of optimization runs with different initial values")
+opt_group.add_argument("--n_samples", type=int, default=10000, help="Number of samples to draw from sample distribution")
+opt_group.add_argument("--sample_distribution", type=str, default="normal", help="Distribution to sample from: 'normal' or 'uniform'")
+opt_group.add_argument("--opt_constraint_threshold", type=float, default=None, help="Log-density threshold for optimization constraint")
+opt_group.add_argument("--opt_constraint_strategy", type=str, default="gmm_fit", help="Strategy for optimization constraint: only 'gmm_fit' is implemented")
+opt_group.add_argument("--n_gmm_components", type=int, default=None, help="Number of components used for GMM fitting")
+opt_group.add_argument("--sparse_out", type=bool, default=True, help="Whether to filter out duplicate outputs")
+opt_group.add_argument("--opt_method", type=str, default="SLSQP", help="Optimization method to use: 'SLSQP', 'COBYLA' 'L-BFGS-B'")
 
 
 # Functions to calculate expected improvement
 # =============================================================================
 def _ei_tensor(x):
-    """ convert arguments to tensor for ei calcs """
+    """
+    Convert arguments to tensor for ei calcs
+    Args:
+        x (np.ndarray): Input data points.
+    Returns:
+        torch.Tensor: Converted tensor.
+    """
     if len(x.shape) == 1:
         x = x.reshape(1, -1)
     return torch.tensor(x, dtype=torch.float32)
 
 
-def neg_ei(x, surrogate, fmin, check_type=True):
+def neg_ei(x, surrogate, fmin, check_type=True, surrogate_type="GP"):
+    """
+    Calculate the negative expected improvement (EI) for a given input x.
+    Args:
+        x (np.ndarray): Input data points.
+        surrogate (object): Surrogate model (DNGO or GP).
+        fmin (float): Minimum observed value.
+        check_type (bool): Whether to check the type of x.
+        surrogate_type (str): Type of surrogate model ("GP" or "DNGO").
+    Returns:
+        torch.Tensor: Negative expected improvement.
+    """
+    # Convert to tensor if needed
     if check_type:
         x = _ei_tensor(x)
 
     # Define standard normal
     std_normal = torch.distributions.Normal(loc=0., scale=1.)
     
-    batch_size = 1000
-    mu = np.zeros(shape=x.shape[0], dtype=np.float32)
-    var = np.zeros(shape=x.shape[0], dtype=np.float32)
-    with torch.no_grad():
-        # Inference variables
-        batch_size = min(x.shape[0], batch_size)
+    if surrogate_type=="GP":
+        mu, var = surrogate.predict_f(x)
+    elif surrogate_type=="DNGO":
+        batch_size = 1000
+        mu = np.zeros(shape=x.shape[0], dtype=np.float32)
+        var = np.zeros(shape=x.shape[0], dtype=np.float32)
+        with torch.no_grad():
+            # Inference variables
+            batch_size = min(x.shape[0], batch_size)
 
-        # Collect all samples
-        for idx in range(x.shape[0] // batch_size):
-            # Collect fake image
-            mu_temp, var_temp = surrogate.predict(x[idx*batch_size : idx*batch_size + batch_size].numpy())
-            mu[idx*batch_size : idx*batch_size + batch_size] = mu_temp.astype(np.float32)
-            var[idx*batch_size : idx*batch_size + batch_size] = var_temp.astype(np.float32)
-
-    # Convert mu and var to tensors
-    mu = torch.tensor(mu, dtype=torch.float32)
-    var = torch.tensor(var, dtype=torch.float32)
+            # Collect all samples
+            for idx in range(x.shape[0] // batch_size):
+                # Collect fake image
+                mu_temp, var_temp = surrogate.predict(x[idx*batch_size : idx*batch_size + batch_size].numpy())
+                mu[idx*batch_size : idx*batch_size + batch_size] = mu_temp.astype(np.float32)
+                var[idx*batch_size : idx*batch_size + batch_size] = var_temp.astype(np.float32)
+            
+        # Convert mu and var to tensors
+        mu = torch.tensor(mu, dtype=torch.float32)
+        var = torch.tensor(var, dtype=torch.float32)
+    else:
+        raise NotImplementedError(surrogate_type)
 
     # Calculate EI
     sigma = torch.sqrt(var)
@@ -75,7 +104,18 @@ def neg_ei(x, surrogate, fmin, check_type=True):
     return -ei
 
 
-def neg_ei_and_grad(x, surrogate, fmin, numpy=True):
+def neg_ei_and_grad(x, surrogate, fmin, numpy=True, surrogate_type="GP"):
+    """
+    Calculate the negative expected improvement (EI) and its gradient for a given input x.
+    Args:
+        x (np.ndarray): Input data points.
+        surrogate (object): Surrogate model (DNGO or GP).
+        fmin (float): Minimum observed value.
+        numpy (bool): Whether to return numpy arrays.
+        surrogate_type (str): Type of surrogate model ("GP" or "DNGO").
+    Returns:
+        tuple: Negative expected improvement and its gradient.
+    """
 
     # Convert to tensor
     x = _ei_tensor(x)
@@ -84,7 +124,7 @@ def neg_ei_and_grad(x, surrogate, fmin, numpy=True):
     x.requires_grad_(True)
 
     # Compute the negative EI
-    val = neg_ei(x, surrogate, fmin, check_type=False)  
+    val = neg_ei(x, surrogate, fmin, check_type=False, surrogate_type=surrogate_type)  
 
     # Compute gradients
     val.backward()
@@ -101,10 +141,27 @@ def neg_ei_and_grad(x, surrogate, fmin, numpy=True):
 # Functions for optimization constraints
 # =============================================================================
 def gmm_constraint(x, fitted_gmm, threshold):
+    """
+    Constraint function for GMM optimization.
+    Args:
+        x (np.ndarray): Input data points.
+        fitted_gmm (GaussianMixture): Fitted GMM model.
+        threshold (float): Log-density threshold.
+    Returns:
+        float: Constraint value.
+    """
     return -threshold + fitted_gmm.score_samples(x.reshape(1,-1))
 
-
 def bound_constraint(x, component, bound):
+    """
+    Constraint function for bounding the optimization variables.
+    Args:
+        x (np.ndarray): Input data points.
+        component (int): Index of the component to constrain.
+        bound (float): Bound value.
+    Returns:
+        float: Constraint value.
+    """
     return bound - np.abs(x[component])
 
 
@@ -126,9 +183,25 @@ def robust_multi_restart_optimizer(
         ):
     """
     Wrapper that calls scipy's optimize function at many different start points.
+    Args:
+        func_with_grad (callable): Function to optimize.
+        X_train (np.ndarray): Training data.
+        method (str): Optimization method.
+        num_pts_to_return (int): Number of points to return.
+        num_starts (int): Number of optimization starts.
+        opt_bounds (float): Optimization bounds.
+        return_res (bool): Whether to return optimization results.
+        logger (logging.Logger): Logger for debugging.
+        n_samples (int): Number of samples to draw from sample distribution.
+        sample_distribution (str): Distribution to sample from ("normal" or "uniform").
+        opt_constraint_threshold (float): Log-density threshold for optimization constraint.
+        opt_constraint_strategy (str): Strategy for optimization constraint ("gmm_fit").
+        n_gmm_components (int): Number of components for GMM fitting.
+        sparse_out (bool): Whether to filter out duplicate outputs.
+    Returns:
+        tuple: Optimized points and their corresponding function values.
     """
-
-    logger.info(f"X_train shape: {X_train.shape}")
+    logger.debug(f"X_train shape: {X_train.shape}")
 
     # Wrapper for tensorflow functions, that handles array flattening and dtype changing
     def objective1d(v):
@@ -145,9 +218,8 @@ def robust_multi_restart_optimizer(
     else:
         raise NotImplementedError(sample_distribution)
 
-    # debugging
-    logger.info(f"latent_grid shape: {latent_grid.shape}")
-    logger.info(f"Sampled points. Now fitting GMM to the latent grid.")
+    logger.debug(f"latent_grid shape: {latent_grid.shape}")
+    logger.debug(f"Sampled points. Now fitting GMM to the latent grid.")
 
     # Filter out points that are below the GMM threshold if specified
     if opt_constraint_threshold is None:
@@ -159,22 +231,23 @@ def robust_multi_restart_optimizer(
         if not n_gmm_components:
             raise Exception("Please specify number of components to use for the GMM model if "
                             "'gmm_fit' is used as optimization constraint strategy.")
+        
         # Fit GMM to the latent grid
         gmm = GaussianMixture(n_components=n_gmm_components, random_state=0, covariance_type="full", max_iter=2000, tol=1e-3).fit(X_train)
-        logger.info(f"GMM fitted with {n_gmm_components} components. Now scoring the latent grid.")
+        logger.debug(f"GMM fitted with {n_gmm_components} components. Now scoring the latent grid.")
         logdens_z_grid = gmm.score_samples(latent_grid)
-        logger.info(f"logdens_z_grid shape: {logdens_z_grid.shape}")
+        logger.debug(f"logdens_z_grid shape: {logdens_z_grid.shape}")
+        logger.debug(f"logdens_z_grid:" f"{logdens_z_grid}")
 
         # Filter out points that are below the threshold
         z_valid = np.array([z for i, z in enumerate(latent_grid) if logdens_z_grid[i] > opt_constraint_threshold],
-                            dtype=np.float32)
-        logger.info(f"z_valid shape: {z_valid.shape}")
+                            dtype=np.float64)
+        logger.debug(f"z_valid shape: {z_valid.shape}")
     else:
         raise NotImplementedError(opt_constraint_strategy)
     
-    # debugging
-    logger.info(f"Finished GMM scoring. Now starting optimization.")
-        
+    logger.debug(f"Finished GMM scoring. Now starting optimization.")
+    
     # Sort the valid points by acquisition function
     if method == "L-BFGS-B":
         z_valid_acq, _ = func_with_grad(z_valid)
@@ -186,7 +259,7 @@ def robust_multi_restart_optimizer(
     else:
         raise NotImplementedError(method)
 
-    z_valid_sorted = z_valid[z_valid_prop_argsort]
+    z_valid_sorted = z_valid[z_valid_prop_argsort].astype(np.float64)
 
     # Main optimization loop
     start_time = time.time()
@@ -285,8 +358,14 @@ def robust_multi_restart_optimizer(
     return x_candidates[:num_pts_to_return], opt_vals_candidates[:num_pts_to_return]
 
 
-def dngo_opt(args):
-    """ Main function to perform Bayesian optimization with DNGO """
+def opt_main(args):
+    """
+    Main function to perform Bayesian optimization with DNGO or GP
+    Args:
+        args (argparse.Namespace): Command line arguments.
+    Returns:
+        np.ndarray: Optimized points.
+    """
 
     # Load method
     method = args.opt_method
@@ -298,11 +377,10 @@ def dngo_opt(args):
 
     # Load the data
     with np.load(args.data_file, allow_pickle=True) as npz:
-        X_train = npz['X_train'].astype(np.float32)
-        y_train = npz['y_train'].astype(np.float32)
+        X_train = npz['X_train'].astype(np.float64)
+        y_train = npz['y_train'].astype(np.float64)
 
     # Reshape the data
-    X_train = X_train.reshape(X_train.shape[0], -1)
     LOGGER.info(f"X_train shape: {X_train.shape}")
     y_train = y_train.reshape(y_train.shape[0])
     LOGGER.info(f"y_train shape: {y_train.shape}")
@@ -386,4 +464,4 @@ def dngo_opt(args):
 if __name__ == "__main__":
     args = parser.parse_args()
     pl.seed_everything(args.seed)
-    dngo_opt(args)
+    opt_main(args)

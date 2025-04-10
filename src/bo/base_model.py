@@ -1,3 +1,8 @@
+"""
+Base model class that is used here for the Bayesian linear regression model.
+Source: https://github.com/janschwedhelm/master-thesis/blob/main/src/dngo/base_model.py
+"""
+
 import abc
 import numpy as np
 

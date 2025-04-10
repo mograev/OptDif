@@ -1,3 +1,9 @@
+"""
+Bayesian Linear Regression model to predict the mean and variance of a target variable given input data points.
+This implementation optionally uses MCMC sampling to estimate hyperparameters (alpha and beta).
+Source: https://github.com/janschwedhelm/master-thesis/blob/main/src/dngo/bayesian_linear_regression.py
+"""
+
 import emcee
 import logging
 import numpy as np
@@ -5,7 +11,7 @@ import numpy as np
 from scipy import optimize
 from scipy import stats
 
-from src.dngo.base_model import BaseModel
+from src.bo.base_model import BaseModel
 
 
 def linear_basis_func(x):
@@ -23,6 +29,11 @@ logger = logging.getLogger(__name__)
 class Prior(object):
 
     def __init__(self, rng=None):
+        """
+        Initializes the prior for the hyperparameters alpha and beta.
+        Args:
+            rng (np.random.RandomState): Random number generator
+        """
         if rng is None:
             self.rng = np.random.RandomState(np.random.randint(0, 10000))
         else:
@@ -31,8 +42,10 @@ class Prior(object):
     def lnprob(self, theta):
         """
         Compute the log probability for theta = [log alpha, log beta]
-        :param theta:
-        :return: log p(theta)
+        Args:
+            theta (np.array(2,)): The hyperparameters alpha and beta on a log scale
+        Returns:
+            float: Log probability of the hyperparameters
         """
         lp = 0
         lp += stats.norm.pdf(theta[0], loc=0, scale=1)  # log alpha
@@ -63,30 +76,18 @@ class BayesianLinearRegression(BaseModel):
         """
         Implementation of Bayesian linear regression. See chapter 3.3 of the book
         "Pattern Recognition and Machine Learning" by Bishop for more details.
-        Parameters
-        ----------
-        alpha: float
-            Specifies the variance of the prior for the weights w
-        beta : float
-            Defines the inverse of the noise, i.e. beta = 1 / sigma^2
-        basis_func : function
-            Function handle to transfer the input with via basis functions
-            (see the code above for an example)
-        prior: Prior object
-            Prior for alpha and beta. If set to None the default prior is used
-        do_mcmc: bool
-            If set to true different values for alpha and beta are sampled via MCMC from the marginal log likelihood
-            Otherwise the marginal log likelihood is optimized with scipy fmin function
-        n_hypers : int
-            Number of samples for alpha and beta
-        chain_length : int
-            The chain length of the MCMC sampler
-        burnin_steps: int
-            The number of burnin steps before the sampling procedure starts
-        rng: np.random.RandomState
-            Random number generator
+        Args:
+            alpha (float): Specifies the variance of the prior for the weights w
+            beta (float): Defines the inverse of the noise, i.e. beta = 1 / sigma^2
+            basis_func (function): Function handle to transfer the input with via basis functions
+            prior (Prior): Prior for alpha and beta. If set to None the default prior is used
+            do_mcmc (bool): If set to true different values for alpha and beta are sampled via MCMC from the marginal log likelihood.
+                Otherwise the marginal log likelihood is optimized with scipy fmin function
+            n_hypers (int): Number of samples for alpha and beta
+            chain_length (int): The chain length of the MCMC sampler
+            burnin_steps (int): The number of burnin steps before the sampling procedure starts
+            rng (np.random.RandomState): Random number generator
         """
-
         if rng is None:
             self.rng = np.random.RandomState(np.random.randint(0, 10000))
         else:
@@ -112,14 +113,10 @@ class BayesianLinearRegression(BaseModel):
         """
         Log likelihood of the data marginalised over the weights w. See chapter 3.5 of
         the book by Bishop of an derivation.
-        Parameters
-        ----------
-        theta: np.array(2,)
-            The hyperparameter alpha and beta on a log scale
-        Returns
-        -------
-        float
-            lnlikelihood + prior
+        Args:
+            theta (np.array(2,)): The hyperparameters alpha and beta on a log scale
+        Returns:
+            float: The marginal log likelihood of the data
         """
 
         # Theta is on a log scale
@@ -154,14 +151,10 @@ class BayesianLinearRegression(BaseModel):
     def negative_mll(self, theta):
         """
         Returns the negative marginal log likelihood (for optimizing it with scipy).
-        Parameters
-        ----------
-        theta: np.array(2,)
-            The hyperparameter alpha and beta on a log scale
-        Returns
-        -------
-        float
-            negative lnlikelihood + prior
+        Args:
+            theta (np.array(2,)): The hyperparameters alpha and beta on a log scale
+        Returns:
+            float: The negative marginal log likelihood of the data
         """
         return -self.marginal_log_likelihood(theta)
 
@@ -171,16 +164,10 @@ class BayesianLinearRegression(BaseModel):
         First optimized the hyperparameters if do_optimize is True and then computes
         the posterior distribution of the weights. See chapter 3.3 of the book by Bishop
         for more details.
-        Parameters
-        ----------
-        X: np.ndarray (N, D)
-            Input data points. The dimensionality of X is (N, D),
-            with N as the number of points and D is the number of features.
-        y: np.ndarray (N,)
-            The corresponding target values.
-        do_optimize: boolean
-            If set to true the hyperparameters are optimized otherwise
-            the default hyperparameters are used.
+        Args:
+            X (np.ndarray (N, D)): N input data points with D input dimensions
+            y (np.ndarray (N,)): The corresponding target values of the input data points
+            do_optimize (bool): If set to True the marginal log likelihood is optimized, otherwise the hyperparameters are sampled via MCMC
         """
 
         self.X = X
@@ -249,19 +236,13 @@ class BayesianLinearRegression(BaseModel):
 
     @BaseModel._check_shapes_predict
     def predict(self, X_test):
-        r"""
-        Returns the predictive mean and variance of the objective function at
-        the given test points.
-        Parameters
-        ----------
-        X_test: np.ndarray (N, D)
-            N input test points
-        Returns
-        ----------
-        np.array(N,)
-            predictive mean
-        np.array(N,)
-            predictive variance
+        """
+        Returns the predictive mean and variance of the objective function at the given test points.
+        Args:
+            X_test (np.ndarray (N, D)): N test data points with D input dimensions
+        Returns:
+            mu (np.ndarray (N,)): Predictive mean of the test data points
+            var (np.ndarray (N,)): Predictive variance of the test data points
         """
         if self.basis_func is not None:
             X_transformed = self.basis_func(X_test)
