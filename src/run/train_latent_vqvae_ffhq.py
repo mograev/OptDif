@@ -78,7 +78,9 @@ if __name__ == "__main__":
     with torch.autograd.set_detect_anomaly(True):
         # Create trainer
         trainer = pl.Trainer(
-            accelerator="gpu" if args.device == "cuda" else "cpu",
+            accelerator="gpu",
+            devices=4,
+            strategy="ddp",
             max_epochs=args.max_epochs,
             limit_train_batches=1.0,
             limit_val_batches=1.0,

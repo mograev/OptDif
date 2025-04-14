@@ -394,8 +394,8 @@ class LatentVQVAE(pl.LightningModule):
 
         # Log metrics
         for k, v in log_dict.items():
-            self.log(f"train_{k}", v, prog_bar=True, on_step=True, on_epoch=True)
-        self.log("train_total_loss", total_loss, prog_bar=True, on_step=True, on_epoch=True)
+            self.log(f"train_{k}", v, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
+        self.log("train_total_loss", total_loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
         
         return total_loss
 
@@ -407,8 +407,8 @@ class LatentVQVAE(pl.LightningModule):
 
         # Log metrics
         for k, v in log_dict.items():
-            self.log(f"val_{k}", v, prog_bar=True, on_step=False, on_epoch=True)
-        self.log("val_total_loss", total_loss, prog_bar=True, on_step=False, on_epoch=True)
+            self.log(f"val_{k}", v, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
+        self.log("val_total_loss", total_loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
 
         return total_loss
 
