@@ -1,6 +1,5 @@
 import os
 import json
-from tqdm import tqdm
 
 from PIL import Image
 import torch
@@ -35,7 +34,7 @@ def preprocess_ffhq(img_dir, img_tensor_dir, attr_path, max_property_value=5, mi
         if not os.path.exists(os.path.join(img_tensor_dir, f"{filename}.pt"))
     ]
     
-    for filename in tqdm(filenames_to_convert):
+    for filename in filenames_to_convert:
         image_path = os.path.join(img_dir, f"{filename}.png")
         image = Image.open(image_path).convert("RGB")
         tensor = transform(image)
