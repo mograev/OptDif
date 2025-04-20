@@ -1,3 +1,7 @@
+"""
+Loss functions for various models including VAE and VQ-VAE.
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

@@ -303,7 +303,7 @@ class LatentVQVAE(pl.LightningModule):
 
         self.automatic_optimization = True
 
-        self.quantize = VectorQuantizer(n_embed, embed_dim, beta=0.25,
+        self.quantize = VectorQuantizer(n_embed, embed_dim, beta=0.05,
                                         remap=remap,
                                         sane_index_shape=sane_index_shape)
         self.quant_conv = torch.nn.Conv2d(ddconfig["z_channels"], embed_dim, 1)
@@ -338,6 +338,11 @@ class LatentVQVAE(pl.LightningModule):
                     print(f"{context}: Restored training weights")
 
     def init_from_ckpt(self, path, ignore_keys=list()):
+        if ignore_keys is None:
+            ignore_keys = []
+        # always ignore EMA buffers
+        ignore_keys = ignore_keys + ["model_ema"]
+
         sd = torch.load(path, map_location="cpu")["state_dict"]
         keys = list(sd.keys())
         for k in keys:
@@ -349,6 +354,7 @@ class LatentVQVAE(pl.LightningModule):
         print(f"Restored from {path} with {len(missing)} missing and {len(unexpected)} unexpected keys")
         if len(missing) > 0:
             print(f"Missing Keys: {missing}")
+        if len(unexpected) > 0:
             print(f"Unexpected Keys: {unexpected}")
 
     def on_train_batch_end(self, *args, **kwargs):
@@ -394,8 +400,8 @@ class LatentVQVAE(pl.LightningModule):
 
         # Log metrics
         for k, v in log_dict.items():
-            self.log(f"train_{k}", v, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
-        self.log("train_total_loss", total_loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True)
+            self.log(f"train_{k}", v, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True) #, sync_dist=True
+        self.log("train_total_loss", total_loss, prog_bar=True, on_step=True, on_epoch=True, sync_dist=True) #, sync_dist=True
         
         return total_loss
 
@@ -407,8 +413,8 @@ class LatentVQVAE(pl.LightningModule):
 
         # Log metrics
         for k, v in log_dict.items():
-            self.log(f"val_{k}", v, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
-        self.log("val_total_loss", total_loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
+            self.log(f"val_{k}", v, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True) #, sync_dist=True
+        self.log("val_total_loss", total_loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True) #, sync_dist=True
 
         return total_loss
 

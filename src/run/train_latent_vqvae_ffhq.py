@@ -32,9 +32,8 @@ if __name__ == "__main__":
     args.device="cuda"
     args.data_device="cuda"
     args.max_epochs=100
-    args.model_output_dir="/pfs/work9/workspace/scratch/ma_mgraevin-optdif/models/latent_vqvae"
-    args.model_config_path="/pfs/work9/workspace/scratch/ma_mgraevin-optdif/models/latent_vqvae/configs/sd35m_to_512d.yaml"
-    # args.chkpt_path="/pfs/work9/workspace/scratch/ma_mgraevin-optdif/models/latent_vqvae/version_1/checkpoints/last.ckpt"
+    args.model_output_dir="models/latent_vqvae"
+    args.model_config_path="models/latent_vqvae/configs/sd35m_to_512d_attn.yaml"
 
     # Seed everything
     pl.seed_everything(args.seed)
@@ -59,6 +58,7 @@ if __name__ == "__main__":
         embed_dim=model_config["embedconfig"]["embed_dim"],
         ckpt_path=None,
         monitor="val_total_loss",
+        use_ema=True,
     )
 
     # Progress bar
@@ -67,7 +67,7 @@ if __name__ == "__main__":
     # TensorBoard logger to log training progress
     tb_logger = pl.loggers.TensorBoardLogger(
         save_dir=args.model_output_dir,
-        version="version_3",
+        version="version_5",
         name="",
     )
 
@@ -78,9 +78,7 @@ if __name__ == "__main__":
     with torch.autograd.set_detect_anomaly(True):
         # Create trainer
         trainer = pl.Trainer(
-            accelerator="gpu",
-            devices=4,
-            strategy="ddp",
+            accelerator="gpu", devices=4, strategy="ddp",
             max_epochs=args.max_epochs,
             limit_train_batches=1.0,
             limit_val_batches=1.0,

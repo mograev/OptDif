@@ -30,8 +30,8 @@ if __name__ == "__main__":
     # Direct arguments
     args.seed=42
     args.max_epochs=100
-    args.model_output_dir="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/models/latent_autoencoder"
-    args.latent_autoencoder_config_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/models/latent_autoencoder/configs/sd35m_to_512d.yaml"
+    args.model_output_dir="models/latent_autoencoder"
+    args.latent_autoencoder_config_path="models/latent_autoencoder/configs/sd35m_to_512d.yaml"
 
     # Seed everything
     pl.seed_everything(args.seed)
