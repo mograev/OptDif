@@ -8,9 +8,9 @@
 #SBATCH --gres=gpu                                          # Request GPU resources
 
 # Dataloader
-img_dir="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/data/ffhq/images1024x1024"
-img_tensor_dir="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/data/ffhq/pt_images"
-attr_path="/pfs/work7/workspace/scratch/ma_mgraevin-optdif/data/ffhq/ffhq_smile_scores.json"
+img_dir="data/ffhq/images1024x1024"
+img_tensor_dir="data/ffhq/pt_images"
+attr_path="data/ffhq/ffhq_smile_scores.json"
 max_property_value=5
 min_property_value=0
 batch_size=128
@@ -28,7 +28,7 @@ eval "$(conda shell.bash hook)"
 conda activate optdif1
 
 # Run the Python script with specified arguments (using srun for SLURM)
-srun python /home/ma/ma_ma/ma_mgraevin/pfs5wor7/ma_mgraevin-optdif/src/run/train_latent_autoencoder_ffhq.py \
+srun python src/run/train_latent_autoencoder_ffhq.py \
     --img_dir $img_dir \
     --img_tensor_dir $img_tensor_dir \
     --attr_path $attr_path \
