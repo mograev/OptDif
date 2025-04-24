@@ -13,19 +13,19 @@ import time
 import numpy as np
 from scipy.optimize import minimize
 from sklearn.mixture import GaussianMixture
-from sklearn.preprocessing import StandardScaler
-from sklearn.decomposition import PCA
 import torch
 import pytorch_lightning as pl
 
+from src.bo.gp_model import SparseGPModel
 from src.utils import sparse_subset
 
 
 # Arguments
 parser = argparse.ArgumentParser()
-opt_group = parser.add_argument_group("DNGO optimization")
+opt_group = parser.add_argument_group("BO optimization")
 opt_group.add_argument("--logfile", type=str, help="file to log to", default="dngo_opt.log")
 opt_group.add_argument("--seed", type=int, required=True)
+opt_group.add_argument("--surrogate_type", type=str, default="GP", help="Type of surrogate model: 'GP' or 'DNGO'")
 opt_group.add_argument("--surrogate_file", type=str, required=True, help="path to load pretrained surrogate model from")
 opt_group.add_argument("--data_file", type=str, help="file to load data from", required=True)
 opt_group.add_argument("--save_file", type=str, required=True, help="file to save results to")
@@ -55,7 +55,7 @@ def _ei_tensor(x):
     return torch.tensor(x, dtype=torch.float32)
 
 
-def neg_ei(x, surrogate, fmin, check_type=True, surrogate_type="GP"):
+def neg_ei(x, surrogate, fmin, check_type=True, numpy=True, surrogate_type="GP"):
     """
     Calculate the negative expected improvement (EI) for a given input x.
     Args:
@@ -63,6 +63,7 @@ def neg_ei(x, surrogate, fmin, check_type=True, surrogate_type="GP"):
         surrogate (object): Surrogate model (DNGO or GP).
         fmin (float): Minimum observed value.
         check_type (bool): Whether to check the type of x.
+        numpy (bool): Whether to return numpy arrays.
         surrogate_type (str): Type of surrogate model ("GP" or "DNGO").
     Returns:
         torch.Tensor: Negative expected improvement.
@@ -75,7 +76,7 @@ def neg_ei(x, surrogate, fmin, check_type=True, surrogate_type="GP"):
     std_normal = torch.distributions.Normal(loc=0., scale=1.)
     
     if surrogate_type=="GP":
-        mu, var = surrogate.predict_f(x)
+        mu, var = surrogate.predict(x)
     elif surrogate_type=="DNGO":
         batch_size = 1000
         mu = np.zeros(shape=x.shape[0], dtype=np.float32)
@@ -101,6 +102,9 @@ def neg_ei(x, surrogate, fmin, check_type=True, surrogate_type="GP"):
     sigma = torch.sqrt(var)
     z = (fmin - mu) / sigma
     ei = (fmin - mu) * std_normal.cdf(z) + sigma * torch.exp(std_normal.log_prob(z))
+
+    if numpy: ei = ei.detach().numpy()
+    
     return -ei
 
 
@@ -124,7 +128,7 @@ def neg_ei_and_grad(x, surrogate, fmin, numpy=True, surrogate_type="GP"):
     x.requires_grad_(True)
 
     # Compute the negative EI
-    val = neg_ei(x, surrogate, fmin, check_type=False, surrogate_type=surrogate_type)  
+    val = neg_ei(x, surrogate, fmin, check_type=False, numpy=False, surrogate_type=surrogate_type)  
 
     # Compute gradients
     val.backward()
@@ -133,7 +137,7 @@ def neg_ei_and_grad(x, surrogate, fmin, numpy=True, surrogate_type="GP"):
     grad = x.grad  
     
     if numpy:
-        return val.numpy(), grad.numpy()
+        return val.detach().numpy(), grad.detach().numpy()
     else:
         return val, grad
 
@@ -203,13 +207,6 @@ def robust_multi_restart_optimizer(
     """
     logger.debug(f"X_train shape: {X_train.shape}")
 
-    # Wrapper for tensorflow functions, that handles array flattening and dtype changing
-    def objective1d(v):
-        if method == "L-BFGS-B":
-            return tuple([arr.ravel().astype(np.float64) for arr in func_with_grad(v)])
-        elif method == "COBYLA" or method == "SLSQP":
-            return tuple([arr.numpy().ravel().astype(np.float64) for arr in func_with_grad(v)])
-
     # Sample grid points either from normal or uniform distribution
     if sample_distribution == "uniform":
         latent_grid = np.random.uniform(low=-opt_bounds, high=opt_bounds, size=(n_samples, X_train.shape[1]))
@@ -238,10 +235,17 @@ def robust_multi_restart_optimizer(
         logdens_z_grid = gmm.score_samples(latent_grid)
         logger.debug(f"logdens_z_grid shape: {logdens_z_grid.shape}")
         logger.debug(f"logdens_z_grid:" f"{logdens_z_grid}")
+        # print stats of the log-density, including percentiles
+        logger.debug(f"Mean log-density: {np.mean(logdens_z_grid):.2f}")
+        logger.debug(f"Std log-density: {np.std(logdens_z_grid):.2f}")
+        logger.debug(f"Min log-density: {np.min(logdens_z_grid):.2f}")
+        logger.debug(f"Max log-density: {np.max(logdens_z_grid):.2f}")
+        logger.debug(f"Median log-density: {np.median(logdens_z_grid):.2f}")
+        logger.debug(f"Percentiles of log-density: {np.percentile(logdens_z_grid, [0, 5, 10, 25, 50, 75, 90, 95, 100])}")
 
         # Filter out points that are below the threshold
         z_valid = np.array([z for i, z in enumerate(latent_grid) if logdens_z_grid[i] > opt_constraint_threshold],
-                            dtype=np.float64)
+                            dtype=np.float32)
         logger.debug(f"z_valid shape: {z_valid.shape}")
     else:
         raise NotImplementedError(opt_constraint_strategy)
@@ -255,11 +259,19 @@ def robust_multi_restart_optimizer(
     elif method == "COBYLA" or method == "SLSQP":
         z_valid_acq = func_with_grad(z_valid)
         logger.info(f"z_valid_acq shape: {z_valid_acq.shape}")
-        z_valid_prop_argsort = np.argsort(z_valid_acq.numpy().reshape(1,-1))[0]  # assuming minimization of property
+        z_valid_prop_argsort = np.argsort(z_valid_acq.reshape(1,-1))[0]  # assuming minimization of property
     else:
         raise NotImplementedError(method)
 
-    z_valid_sorted = z_valid[z_valid_prop_argsort].astype(np.float64)
+    z_valid_sorted = z_valid[z_valid_prop_argsort]
+
+    # Wrapper for functions, that handles array flattening and dtype changing
+    def objective1d(v):
+        # if method == "L-BFGS-B":
+        #     return tuple([arr.ravel().astype(np.float32) for arr in func_with_grad(v)])
+        # elif method == "COBYLA" or method == "SLSQP":
+        #     return tuple([arr.ravel().astype(np.float32) for arr in func_with_grad(v)])
+        return tuple([arr.ravel().astype(np.float32) for arr in func_with_grad(v)])
 
     # Main optimization loop
     start_time = time.time()
@@ -320,6 +332,7 @@ def robust_multi_restart_optimizer(
                 res = minimize(
                     fun=objective1d, x0=z_valid_sorted[i],
                     method=method,
+                    bounds=[(-opt_bounds, opt_bounds) for _ in range(X_train.shape[1])],
                     constraints=[{"type": "ineq", "fun": gmm_constraint, "args": (gmm, opt_constraint_threshold)}],
                     options={'maxiter': 1000, 'eps': 1e-5})
 
@@ -371,23 +384,32 @@ def opt_main(args):
     method = args.opt_method
 
     # Set up logger
-    LOGGER = logging.getLogger()
-    LOGGER.setLevel(logging.INFO)
-    LOGGER.addHandler(logging.FileHandler(args.logfile))
+    logger = logging.getLogger()
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(logging.FileHandler(args.logfile))
 
     # Load the data
     with np.load(args.data_file, allow_pickle=True) as npz:
-        X_train = npz['X_train'].astype(np.float64)
-        y_train = npz['y_train'].astype(np.float64)
+        X_train = npz['X_train'].astype(np.float32)
+        y_train = npz['y_train'].astype(np.float32)
 
     # Reshape the data
-    LOGGER.info(f"X_train shape: {X_train.shape}")
+    X_train = X_train.reshape(X_train.shape[0], -1)
+    logger.info(f"X_train shape: {X_train.shape}")
     y_train = y_train.reshape(y_train.shape[0])
-    LOGGER.info(f"y_train shape: {y_train.shape}")
+    logger.info(f"y_train shape: {y_train.shape}")
 
-    # Load pretrained DNGO
-    with open(args.surrogate_file, 'rb') as inp:
-        surrogate = pickle.load(inp)
+    # Load pretrained surrogate model
+    if args.surrogate_type == "GP":
+        ckpt = torch.load(args.surrogate_file)
+        surrogate = SparseGPModel(ckpt["inducing_points"], ckpt["ard_dims"])
+        surrogate.load_state_dict(ckpt["state_dict"])
+        surrogate.eval()
+    elif args.surrogate_type == "DNGO":
+        with open(args.surrogate_file, 'rb') as inp:
+            surrogate = pickle.load(inp)
+    else:
+        raise NotImplementedError(args.surrogate_type)
 
     # Choose a value for fmin.
     """
@@ -396,18 +418,18 @@ def opt_main(args):
     Choosing a low-ish percentile seems to be a good comprimise.
     """
     fmin = np.percentile(y_train, 10)
-    LOGGER.info(f"Using fmin={fmin:.2f}")
+    logger.info(f"Using fmin={fmin:.2f}")
 
     # Set optimization bounds
-    opt_bounds = 3
-    LOGGER.info(f"Using optimization bound of {opt_bounds}")
+    opt_bounds = 1
+    logger.info(f"Using optimization bound of {opt_bounds}")
 
     # Run the optimization
-    LOGGER.info("\n### Starting optimization ### \n")
+    logger.info("\n### Starting optimization ### \n")
 
     if method == "L-BFGS-B":
         latent_pred, ei_vals = robust_multi_restart_optimizer(
-            functools.partial(neg_ei_and_grad, surrogate=surrogate, fmin=fmin),
+            functools.partial(neg_ei_and_grad, surrogate=surrogate, fmin=fmin, surrogate_type=args.surrogate_type),
             X_train,
             method,
             num_pts_to_return=args.n_out,
@@ -415,7 +437,7 @@ def opt_main(args):
             opt_bounds=opt_bounds,
             n_samples=args.n_samples,
             sample_distribution=args.sample_distribution,
-            logger=LOGGER,
+            logger=logger,
             opt_constraint_threshold=args.opt_constraint_threshold,
             opt_constraint_strategy=args.opt_constraint_strategy,
             n_gmm_components=args.n_gmm_components,
@@ -423,7 +445,7 @@ def opt_main(args):
         )
     elif method == "COBYLA" or method=="SLSQP":
         latent_pred, ei_vals = robust_multi_restart_optimizer(
-            functools.partial(neg_ei, surrogate=surrogate, fmin=fmin),
+            functools.partial(neg_ei, surrogate=surrogate, fmin=fmin, surrogate_type=args.surrogate_type),
             X_train,
             method,
             num_pts_to_return=args.n_out,
@@ -431,7 +453,7 @@ def opt_main(args):
             opt_bounds=opt_bounds,
             n_samples=args.n_samples,
             sample_distribution=args.sample_distribution,
-            logger=LOGGER,
+            logger=logger,
             opt_constraint_threshold=args.opt_constraint_threshold,
             opt_constraint_strategy=args.opt_constraint_strategy,
             n_gmm_components=args.n_gmm_components,
@@ -440,23 +462,30 @@ def opt_main(args):
     else:
         raise NotImplementedError(method)
 
-    LOGGER.info(f"Done optimization! {len(latent_pred)} results found\n\n.")
+    logger.info(f"Done optimization! {len(latent_pred)} results found\n\n.")
 
-    # Save results
+    # Ensure datatype is float32
     latent_pred = np.array(latent_pred, dtype=np.float32)
-    np.save(args.save_file, latent_pred)
 
     # Make some gp predictions in the log file
-    LOGGER.info("EI results:")
-    LOGGER.info(ei_vals)
-
-    mu, var = surrogate.predict(latent_pred)
-    LOGGER.info("mu at points:")
-    LOGGER.info(list(mu.ravel()))
-    LOGGER.info("var at points:")
-    LOGGER.info(list(var.ravel()))
+    logger.info("EI results:")
+    logger.info(ei_vals)
+    if args.surrogate_type == "GP":
+        latent_pred_tensor = torch.tensor(latent_pred)
+        mu, var = surrogate.predict(latent_pred_tensor)
+    elif args.surrogate_type == "DNGO":
+        mu, var = surrogate.predict(latent_pred)
+    logger.info("mu at points:")
+    logger.info(list(mu.ravel()))
+    logger.info("var at points:")
+    logger.info(list(var.ravel()))
     
-    LOGGER.info("\n\nEND OF SCRIPT!")
+    logger.info("\n\nEND OF SCRIPT!")
+
+    # Reshape to original data shape (B, 8, 8, 8)
+    latent_pred = latent_pred.reshape(latent_pred.shape[0], 8, 8, 8)
+    # Save results
+    np.save(args.save_file, latent_pred)
 
     return latent_pred
 

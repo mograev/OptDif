@@ -114,6 +114,8 @@ class DNGO(BaseModel):
         self.beta = beta
         self.normalize_input = normalize_input
         self.normalize_output = normalize_output
+        logging.info("Normalize input: %s" % self.normalize_input)
+        logging.info("Normalize output: %s" % self.normalize_output)
 
         # MCMC hyperparameters
         self.do_mcmc = do_mcmc
@@ -156,7 +158,7 @@ class DNGO(BaseModel):
             self.X, self.X_mean, self.X_std = zero_mean_unit_var_normalization(X)
         else:
             self.X = X
-
+            
         # Normalize ouputs
         if self.normalize_output:
             self.y, self.y_mean, self.y_std = zero_mean_unit_var_normalization(y)

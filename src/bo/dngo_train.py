@@ -10,7 +10,7 @@ import numpy as np
 import argparse
 import pytorch_lightning as pl
 
-from src.bo.dngo import DNGO
+from src.bo.dngo_model import DNGO
 
 
 # Arguments
@@ -33,9 +33,9 @@ def dngo_train(args):
     """
 
     # Set up logger
-    LOGGER = logging.getLogger()
-    LOGGER.setLevel(logging.INFO)
-    LOGGER.addHandler(logging.FileHandler(args.logfile))
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+    logger.addHandler(logging.FileHandler(args.logfile))
 
     # Load the data
     with np.load(args.data_file, allow_pickle=True) as npz:
@@ -44,21 +44,22 @@ def dngo_train(args):
     model = DNGO(normalize_input=args.normalize_input, normalize_output=args.normalize_output, do_mcmc=args.do_mcmc)
 
     # Reshape the data
+    X_train = X_train.reshape(X_train.shape[0], -1)
     y_train = y_train.reshape(y_train.shape[0])
-    LOGGER.info(f"X_train shape: {X_train.shape}")
-    LOGGER.info(f"y_train shape: {y_train.shape}")
+    logger.info(f"X_train shape: {X_train.shape}")
+    logger.info(f"y_train shape: {y_train.shape}")
 
-    LOGGER.info("Start model fitting")
+    logger.info("Start model fitting")
     start_time = time.time()
     model.train(X_train, y_train, do_optimize=True)
     end_time = time.time()
-    LOGGER.info(f"Model fitting took {end_time - start_time:.1f}s to finish")
+    logger.info(f"Model fitting took {end_time - start_time:.1f}s to finish")
 
     # Save DNGO model
-    LOGGER.info("\nSave DNGO model...")
+    logger.info("\nSave DNGO model...")
     with open(args.save_file, 'wb') as outp:
         pickle.dump(model, outp, pickle.HIGHEST_PROTOCOL)
-    LOGGER.info("\nSUCCESSFUL END OF SCRIPT")
+    logger.info("\nSUCCESSFUL END OF SCRIPT")
 
 
 if __name__ == "__main__":
