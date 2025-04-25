@@ -5,7 +5,9 @@ Reference: [1] J. Snoek, O. Rippel, K. Swersky, R. Kiros, N. Satish,
             N. Sundaram, M.~M.~A. Patwary, Prabhat, R.~P. Adams
             Scalable Bayesian Optimization Using Deep Neural Networks
             Proc. of ICML'15
-Code Source: https://github.com/janschwedhelm/master-thesis/blob/main/src/dngo/dngo.py
+Code Sources:
+- https://github.com/janschwedhelm/master-thesis/blob/main/src/dngo/dngo.py
+- https://github.com/janschwedhelm/master-thesis/blob/main/src/dngo/base_model.py
 """
 
 import time
@@ -16,10 +18,8 @@ import emcee
 import torch
 import torch.nn as nn
 import torch.optim as optim
-
 from scipy import optimize
 
-from src.bo.base_model import BaseModel
 from src.bo.util.normalization import zero_mean_unit_var_normalization, zero_mean_unit_var_denormalization
 from src.bo.bayesian_linear_regression import BayesianLinearRegression, Prior
 
@@ -70,7 +70,7 @@ class Net(nn.Module):
         return x
 
 
-class DNGO(BaseModel):
+class DNGO:
     """Deep Networks for Global Optimization (DNGO) model."""
 
     def __init__(self, batch_size=10, num_epochs=50,
@@ -141,7 +141,6 @@ class DNGO(BaseModel):
         self.models = []
         self.hypers = None
 
-    @BaseModel._check_shapes_train
     def train(self, X, y, do_optimize=True):
         """
         Trains the model on the provided data.
@@ -151,6 +150,10 @@ class DNGO(BaseModel):
             y (np.ndarray): The corresponding target values of the input data points.
             do_optimize (bool): If True, optimize hyperparameters, otherwise sample them
         """
+        # Basic shape cheks
+        assert X.shape[0] == y.shape[0], "Number of inputs and targets must match."
+        assert len(X.shape) == 2 and len(y.shape) == 1, "Incorrect shape for X or y."
+
         start_time = time.time()
 
         # Normalize inputs
@@ -343,7 +346,6 @@ class DNGO(BaseModel):
                 excerpt = slice(start_idx, start_idx + batchsize)
             yield inputs[excerpt], targets[excerpt]
 
-    @BaseModel._check_shapes_predict
     def predict(self, X_test):
         """
         Returns the predictive mean and variance of the objective function at
@@ -354,6 +356,9 @@ class DNGO(BaseModel):
             np.ndarray: Predictive mean of the test data points
             np.ndarray: Predictive variance of the test data points
         """
+        # Basic shape check
+        assert len(X_test.shape) == 2, "Incorrect shape for X_test."
+
         # Normalize inputs
         if self.normalize_input:
             X_, _, _ = zero_mean_unit_var_normalization(X_test, self.X_mean, self.X_std)
@@ -393,16 +398,18 @@ class DNGO(BaseModel):
         """
         Returns the best observed point and its function value
         Returns:
-            tuple: incumbent (np.ndarray), incumbent_value (np.ndarray)
-                incumbent: current incumbent
-                incumbent_value: the observed value of the incumbent
+            incumbent (np.ndarray): the best observed point
+            incumbent_value (float): the function value at the best observed point
         """
+        # Use self.X and self.y to compute the current best (lowest) objective value
+        best_idx = np.argmin(self.y)
+        incumbent = self.X[best_idx]
+        incumbent_value = self.y[best_idx]
 
-        inc, inc_value = super(DNGO, self).get_incumbent()
         if self.normalize_input:
-            inc = zero_mean_unit_var_denormalization(inc, self.X_mean, self.X_std)
+            incumbent = zero_mean_unit_var_denormalization(incumbent, self.X_mean, self.X_std)
 
         if self.normalize_output:
-            inc_value = zero_mean_unit_var_denormalization(inc_value, self.y_mean, self.y_std)
+            incumbent_value = zero_mean_unit_var_denormalization(incumbent_value, self.y_mean, self.y_std)
 
-        return inc, inc_value
+        return incumbent, incumbent_value

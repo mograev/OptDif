@@ -66,7 +66,7 @@ def neg_ei(x, surrogate, fmin, check_type=True, numpy=True, surrogate_type="GP")
         numpy (bool): Whether to return numpy arrays.
         surrogate_type (str): Type of surrogate model ("GP" or "DNGO").
     Returns:
-        torch.Tensor: Negative expected improvement.
+        torch.Tensor or np.ndarray: Negative expected improvement.
     """
     # Convert to tensor if needed
     if check_type:
@@ -118,7 +118,8 @@ def neg_ei_and_grad(x, surrogate, fmin, numpy=True, surrogate_type="GP"):
         numpy (bool): Whether to return numpy arrays.
         surrogate_type (str): Type of surrogate model ("GP" or "DNGO").
     Returns:
-        tuple: Negative expected improvement and its gradient.
+        torch.Tensor or np.ndarray: Negative expected improvement
+        torch.Tensor or np.ndarray: Gradient of the negative expected improvement.
     """
 
     # Convert to tensor
@@ -203,7 +204,8 @@ def robust_multi_restart_optimizer(
         n_gmm_components (int): Number of components for GMM fitting.
         sparse_out (bool): Whether to filter out duplicate outputs.
     Returns:
-        tuple: Optimized points and their corresponding function values.
+        np.ndarray: Optimized points.
+        np.ndarray: Optimized values.
     """
     logger.debug(f"X_train shape: {X_train.shape}")
 
@@ -211,7 +213,7 @@ def robust_multi_restart_optimizer(
     if sample_distribution == "uniform":
         latent_grid = np.random.uniform(low=-opt_bounds, high=opt_bounds, size=(n_samples, X_train.shape[1]))
     elif sample_distribution == "normal":
-        latent_grid = np.random.normal(loc=0.0, scale=1.0, size=(n_samples, X_train.shape[1]))
+        latent_grid = np.random.normal(loc=0.0, scale=0.25, size=(n_samples, X_train.shape[1]))
     else:
         raise NotImplementedError(sample_distribution)
 

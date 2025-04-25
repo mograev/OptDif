@@ -1,7 +1,9 @@
 """
 Bayesian Linear Regression model to predict the mean and variance of a target variable given input data points.
 This implementation optionally uses MCMC sampling to estimate hyperparameters (alpha and beta).
-Source: https://github.com/janschwedhelm/master-thesis/blob/main/src/dngo/bayesian_linear_regression.py
+Sources:
+- https://github.com/janschwedhelm/master-thesis/blob/main/src/dngo/bayesian_linear_regression.py
+- https://github.com/janschwedhelm/master-thesis/blob/main/src/dngo/base_model.py
 """
 
 import emcee
@@ -10,8 +12,6 @@ import numpy as np
 
 from scipy import optimize
 from scipy import stats
-
-from src.bo.base_model import BaseModel
 
 
 def linear_basis_func(x):
@@ -68,7 +68,7 @@ class Prior(object):
         return p0
 
 
-class BayesianLinearRegression(BaseModel):
+class BayesianLinearRegression:
 
     def __init__(self, alpha=1, beta=1000, basis_func=linear_basis_func,
                  prior=None, do_mcmc=True, n_hypers=20, chain_length=2000,
@@ -157,8 +157,7 @@ class BayesianLinearRegression(BaseModel):
             float: The negative marginal log likelihood of the data
         """
         return -self.marginal_log_likelihood(theta)
-
-    @BaseModel._check_shapes_train
+    
     def train(self, X, y, do_optimize=True):
         """
         First optimized the hyperparameters if do_optimize is True and then computes
@@ -169,6 +168,9 @@ class BayesianLinearRegression(BaseModel):
             y (np.ndarray (N,)): The corresponding target values of the input data points
             do_optimize (bool): If set to True the marginal log likelihood is optimized, otherwise the hyperparameters are sampled via MCMC
         """
+        # Basic shape cheks
+        assert X.shape[0] == y.shape[0], "Number of inputs and targets must match."
+        assert len(X.shape) == 2 and len(y.shape) == 1, "Incorrect shape for X or y."
 
         self.X = X
 
@@ -234,7 +236,6 @@ class BayesianLinearRegression(BaseModel):
 
             self.models.append((m, S))
 
-    @BaseModel._check_shapes_predict
     def predict(self, X_test):
         """
         Returns the predictive mean and variance of the objective function at the given test points.
@@ -244,6 +245,9 @@ class BayesianLinearRegression(BaseModel):
             mu (np.ndarray (N,)): Predictive mean of the test data points
             var (np.ndarray (N,)): Predictive variance of the test data points
         """
+        # Basic shape check
+        assert len(X_test.shape) == 2, "Incorrect shape for X_test."
+
         if self.basis_func is not None:
             X_transformed = self.basis_func(X_test)
         else:

@@ -1,6 +1,5 @@
 """
 Train a sparse GP (variational inducing-point regression) with GPyTorch.
-
 This is a feature-for-feature rewrite of the GPflow version found at
 https://github.com/janschwedhelm/master-thesis/blob/main/src/gp_train.py
 """
@@ -39,7 +38,6 @@ parser.add_argument("--z_noise", type=float, default=None)
 parser.add_argument("--learning_rate", type=float, default=3e-2)
 parser.add_argument("--kernel_learning_rate", type=float, default=1e-1)
 
-
 # -----------------------------------------------------------------------------#
 #  Utilities
 # -----------------------------------------------------------------------------#
@@ -47,7 +45,13 @@ parser.add_argument("--kernel_learning_rate", type=float, default=1e-1)
 def gp_performance_metrics(model, likelihood, X_train, y_train):
     """
     Compute negative ELBO, RMSE, and predictive log-likelihood on the training set.
-    Returns a dict {metric_name: value}.
+    Args:
+        model (SparseGPModel): The sparse GP model.
+        likelihood (gpytorch.likelihoods.GaussianLikelihood): The likelihood function.
+        X_train (Tensor): Training input data.
+        y_train (Tensor): Training target data.
+    Returns:
+        dict: Dictionary containing the computed metrics.
     """
     model.eval()
     likelihood.eval()
@@ -78,6 +82,14 @@ def gp_performance_metrics(model, likelihood, X_train, y_train):
 
 
 def _format_dict(d):
+    """
+    Format a dictionary for logging, by rounding values to 2 decimal places
+    or using scientific notation for large values.
+    Args:
+        d (dict): Dictionary to format.
+    Returns:
+        dict: Formatted dictionary.
+    """
     out = {}
     for k, v in d.items():
         out[k] = f"{v:.2f}" if abs(v) < 10 else f"{v:.2e}"
@@ -92,7 +104,7 @@ def gp_train(
     nZ,
     data_file,
     save_file,
-    logfile="gp_train.log",
+    logfile,
     device="cpu",
     kmeans_init=False,
     n_opt_iter=100000,
@@ -104,6 +116,25 @@ def gp_train(
     learning_rate=3e-2,
     kernel_learning_rate=1e-1,
 ):
+    """
+    Train a sparse Gaussian Process model using GPyTorch.
+    Args:
+        nZ (int): Number of inducing points.
+        data_file (str): Path to the training data file.
+        save_file (str): Path to save the trained model.
+        logfile (str): Path to the log file.
+        device (str): Device to use for training ('cpu' or 'cuda').
+        kmeans_init (bool): Whether to initialize inducing points using K-means.
+        n_opt_iter (int): Number of optimization iterations.
+        convergence_tol (float): Convergence tolerance for early stopping.
+        kernel_convergence_tol (float): Convergence tolerance for kernel parameters.
+        early_stopping (bool): Whether to use early stopping.
+        measure_freq (int): Frequency of performance measurement during training.
+        z_noise (float or None): Optional noise added to inducing points.
+        learning_rate (float): Learning rate for the optimizer.
+        kernel_learning_rate (float): Learning rate for the kernel optimizer.
+    """
+    # ------------------------------------------------------------------ setup --
     # Logging
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
@@ -124,6 +155,7 @@ def gp_train(
     # ------------------------------------------------------------------ init --
     logger.info("Initializing hyperparameters")
 
+    # Initialize inducing points
     if kmeans_init:
         logger.info("Running K-means")
         kmeans = MiniBatchKMeans(
@@ -138,6 +170,7 @@ def gp_train(
     else:
         Z = X_train[np.random.choice(len(X_train), nZ, replace=False)]
 
+    # Initialize kernel parameters
     log_lengthscales = 0.1 * np.random.randn(D)
     kernel_lengthscales = np.exp(log_lengthscales)
     kernel_variance = y_train.var()
@@ -188,7 +221,6 @@ def gp_train(
 
     optimize_kernel_only = True
     logger.info("Beginning optimization")
-
     for step in range(1, n_opt_iter + 1):
         # ------------------------------------------------------ training step --
         model.train()
