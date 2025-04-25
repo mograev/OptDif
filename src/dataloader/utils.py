@@ -129,14 +129,17 @@ class MultiModeDataset(Dataset):
             elif self.mode == 'img_tensor':
                 path = os.path.join(mode_dir, f"{name_without_ext}.pt")
                 file = torch.load(path, weights_only=False)
-            else:
+            elif self.mode == 'sd_latent':
+                try:
+                    path = os.path.join(mode_dir, f"{name_without_ext}.pt")
+                    file = torch.load(path, weights_only=False)
+                except:
+                    # Fallback to loading directly from filename
+                    path = os.path.join(filename)
+                    file = torch.load(path, weights_only=False)
+            elif self.mode == 'direct':
                 path = os.path.join(filename)
                 file = torch.load(path, weights_only=False)
-
-            # debugging
-            # print(f"Loading {self.mode} from {path}")
-            # print cuda memory usage
-
 
             # Potentially apply transformations and encoding to images
             if self.mode == 'img' or self.mode == 'img_tensor':
@@ -147,11 +150,6 @@ class MultiModeDataset(Dataset):
                         file = file.unsqueeze(0).to(self.device)
                         file = self.encoder.encode(file).latent_dist.sample()
                         file = file.squeeze(0).cpu()
-
-            # Move tensor to the specified device
-            #file = file.to(self.device)
-            # print("File loaded to device:", file.device)
-            # print(f"CUDA Memory Allocated: {torch.cuda.memory_allocated() / (1024 ** 2)} MB")
 
             return file
             
