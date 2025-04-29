@@ -16,6 +16,7 @@ models/latent_autoencoder/*
 models/latent_vqvae/*
 !models/latent_vqvae/configs/
 !models/latent_vqvae/configs/**
+taming/
 
 # Optimization results
 results/
