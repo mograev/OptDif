@@ -3,12 +3,15 @@ from contextlib import contextmanager
 import torch
 from torch.optim.lr_scheduler import LambdaLR
 import pytorch_lightning as pl
-from src.models.modules.taming.quantize import VectorQuantizer2 as VectorQuantizer
+
+# Import Stable Diffusion VAE decoder for optional pixel-space losses
+from diffusers import AutoencoderKL
 
 from src.models.modules.autoencoder import Encoder, Decoder
 from src.models.modules.distributions import DiagonalGaussianDistribution
+from src.models.modules.quantize import VectorQuantizer2 as VectorQuantizer
 from src.models.modules.utils import instantiate_from_config
-from src.models.modules.losses import SimpleVAELoss, VAEWithDiscriminator
+from src.models.modules.losses import SimpleVAELoss, VAEWithDiscriminator, LPIPSWithDiscriminator
 from src.models.modules.ema import LitEma
 
 
@@ -17,6 +20,7 @@ class LatentVAE(pl.LightningModule):
                  ddconfig,
                  lossconfig,
                  embed_dim,
+                 sd_vae_path=None,
                  ckpt_path=None,
                  ignore_keys=[],
                  monitor=None,
@@ -65,7 +69,13 @@ class LatentVAE(pl.LightningModule):
             torch.nn.Linear(embed_dim, ddconfig["z_channels"] * spatial_size),  # Project from flat latent to spatial
             torch.nn.Unflatten(1, (ddconfig["z_channels"], bottleneck_resolution, bottleneck_resolution))  # Reshape to spatial
         )
-        
+
+        if sd_vae_path:
+            # Load weights from a pre-trained Stable Diffusion VAE
+            self.sd_vae = AutoencoderKL.from_pretrained(sd_vae_path, subfolder="vae")
+            self.sd_vae.eval()
+            self.sd_vae.requires_grad_(False)
+
         if monitor is not None:
             self.monitor = monitor
         if ckpt_path is not None:
@@ -132,136 +142,261 @@ class LatentVAE(pl.LightningModule):
         # Latents are already in the right format (B, C, H, W), so we just ensure correct dtype
         return x.to(memory_format=torch.contiguous_format).float()
     
+    @torch.no_grad()
+    def latents_to_images(self, latents):
+        """
+        Decode Stable-Diffusion latents to pixel space.
+        """
+        if self.sd_vae is None:
+            raise RuntimeError("latents_to_images() called but sd_vae is not initialized.")
+        # Move decoder to correct device if necessary
+        self.sd_vae.to(latents.device)
+        images = self.sd_vae.decode(latents).sample
+        return images
+    
     def training_step(self, batch, batch_idx):
+        # -- 1. Get data ----------------------------------------------------
         # Get inputs & reconstructions
         inputs = self.get_input(batch)
-        reconstructions, posterior = self(inputs)
+        recons, posterior = self(inputs)
 
-        if isinstance(self.loss, VAEWithDiscriminator):
-            # A1) Get optimizers
+        # Get the last layer of the decoder for adaptive loss
+        last_layer = self.get_last_layer()
+
+        # -- 2. Run training step based on the loss function ----------------
+
+        if isinstance(self.loss, LPIPSWithDiscriminator):
+            # -- A1. Decode latents to images -------------------------------
+            try:
+                with torch.no_grad():
+                    inputs_img = self.latents_to_images(inputs)
+                    recons_img = self.latents_to_images(recons)
+            except AttributeError:
+                raise RuntimeError("latents_to_images() called but sd_vae is not initialized.")
+
+            # -- A2. Grab the two optimizers --------------------------------
             opt_vae, opt_disc = self.optimizers()
 
-            # A2) Generator forward + backward
+            # -- A3. Generator / VAE update (optimizer_idx = 0) -------------
+            loss_gen, log_gen = self.loss(
+                inputs, recons,
+                inputs_img, recons_img,
+                posterior,
+                optimizer_idx=0,
+                global_step=self.global_step,
+                last_layer=last_layer,
+                split="train"
+            )
+
+            opt_vae.zero_grad()
+            self.manual_backward(loss_gen)
+            opt_vae.step()
+
+            # -- A4. Discriminator update (optimizer_idx = 1) ---------------
+            # detach everything that should not receive grads
+            loss_disc, log_disc = self.loss(
+                inputs.detach(), recons.detach(),
+                inputs_img.detach(), recons_img.detach(),
+                posterior.detach(),
+                optimizer_idx=1,
+                global_step=self.global_step,
+                split="train"
+            )
+
+            opt_disc.zero_grad()
+            self.manual_backward(loss_disc)
+            opt_disc.step()
+
+            # -- A5. Summarize losses ---------------------------------------
+            log_dict = {**log_gen, **log_disc}
+            total_loss = loss_gen + loss_disc
+
+        elif isinstance(self.loss, VAEWithDiscriminator):
+            # -- B1. Grab the two optimizers --------------------------------
+            opt_vae, opt_disc = self.optimizers()
+
+            # -- B2. Generator / VAE update (optimizer_idx = 0) -------------
             loss_gen, log_dict_gen = self.loss(
                 inputs=inputs,
-                reconstructions=reconstructions,
+                reconstructions=recons,
                 posterior=posterior,
                 optimizer_idx=0,
-                global_step=self.global_step
+                global_step=self.global_step,
+                split="train"
             )
+
             opt_vae.zero_grad()
             self.manual_backward(loss_gen)  
             opt_vae.step()
 
-            # A3) Discriminator forward + backward (detach reconstructions)
-            with torch.no_grad():
-                reconstructions, posterior = self(inputs) # recompute reconstructions
-                reconstructions = reconstructions.detach()
-                # Rebuild distribution with detached mu and logvar
-                posterior = DiagonalGaussianDistribution(
-                    posterior.parameters.detach()
-                )
+            # -- B3. Discriminator update (optimizer_idx = 1) ---------------
             loss_disc, log_dict_disc = self.loss(
-                inputs=inputs,
-                reconstructions=reconstructions,
-                posterior=posterior,
+                inputs=inputs.detach(),
+                reconstructions=recons.detach(),
+                posterior=posterior.detach(),
                 optimizer_idx=1,
-                global_step=self.global_step
+                global_step=self.global_step,
+                split="train"
             )
             opt_disc.zero_grad()
             self.manual_backward(loss_disc)
             opt_disc.step()
 
-            # A4) Summarize losses
+            # -- B4. Summarize losses ---------------------------------------
             log_dict = {**log_dict_gen, **log_dict_disc}
             total_loss = loss_gen + loss_disc
             
         elif isinstance(self.loss, SimpleVAELoss):
-            # B1) Get optimizer
+            # -- C1. Grab the optimizer -------------------------------------
             opt_vae = self.optimizers()
 
-            # B2) Compute loss
+            # -- C2. Compute loss -------------------------------------------
             total_loss, log_dict = self.loss(
                 inputs=inputs,
-                reconstructions=reconstructions,
-                posterior=posterior
+                reconstructions=recons,
+                posterior=posterior,
+                split="train"
             )
 
-            # B3) Backward pass
             opt_vae.zero_grad()
             self.manual_backward(total_loss)
             opt_vae.step()
         
         else:
             raise ValueError("Invalid loss function: {}".format(type(self.loss)))
-                
+        
+
+        # -- 3. Logging -----------------------------------------------------
         # Log metrics
-        for k, v in log_dict.items():
-            self.log(k, v, prog_bar=True, on_step=True, on_epoch=True)
-        self.log("total_loss", total_loss, prog_bar=True, on_step=True, on_epoch=True)
+        self.log_dict(log_dict, prog_bar=False, on_step=True, on_epoch=True, sync_dist=True)
+        self.log("train/total_loss", total_loss, prog_bar=False, on_step=True, on_epoch=True, sync_dist=True)
 
         return total_loss
     
+    
     def validation_step(self, batch, batch_idx):
+        # -- 1. Get data ----------------------------------------------------
         # Get inputs & reconstructions
         inputs = self.get_input(batch)
-        reconstructions, posterior = self(inputs)
-        
-        if isinstance(self.loss, VAEWithDiscriminator):
-            # A) Generator loss
+        recons, posterior = self(inputs)
+
+        # Get the last layer of the decoder for adaptive loss
+        last_layer = self.get_last_layer()
+
+        # -- 2. Run training step based on the loss function ----------------
+
+        if isinstance(self.loss, LPIPSWithDiscriminator):
+            # -- A1. Decode latents to images -------------------------------
+            try:
+                with torch.no_grad():
+                    inputs_img = self.latents_to_images(inputs)
+                    recons_img = self.latents_to_images(recons)
+            except AttributeError:
+                raise RuntimeError("latents_to_images() called but sd_vae is not initialized.")
+
+            # -- A2. Grab the two optimizers --------------------------------
+            opt_vae, opt_disc = self.optimizers()
+
+            # -- A3. Generator / VAE loss (optimizer_idx = 0) ---------------
+            loss_gen, log_gen = self.loss(
+                inputs, recons,
+                inputs_img, recons_img,
+                posterior,
+                optimizer_idx=0,
+                global_step=self.global_step,
+                last_layer=last_layer,
+                split="val"
+            )
+
+            # -- A4. Discriminator loss (optimizer_idx = 1) -----------------
+            loss_disc, log_disc = self.loss(
+                inputs.detach(), recons.detach(),
+                inputs_img.detach(), recons_img.detach(),
+                posterior.detach(),
+                optimizer_idx=1,
+                global_step=self.global_step,
+                split="val"
+            )
+
+            # -- A5. Summarize losses ---------------------------------------
+            log_dict = {**log_gen, **log_disc}
+            total_loss = loss_gen + loss_disc
+
+        elif isinstance(self.loss, VAEWithDiscriminator):
+            # -- B1. Grab the two optimizers --------------------------------
+            opt_vae, opt_disc = self.optimizers()
+
+            # -- B2. Generator / VAE update (optimizer_idx = 0) -------------
             loss_gen, log_dict_gen = self.loss(
                 inputs=inputs,
-                reconstructions=reconstructions,
+                reconstructions=recons,
                 posterior=posterior,
                 optimizer_idx=0,
-                global_step=self.global_step
+                global_step=self.global_step,
+                split="val"
             )
 
-            # A) Discriminator loss
+            # -- B3. Discriminator update (optimizer_idx = 1) ---------------
             loss_disc, log_dict_disc = self.loss(
-                inputs=inputs,
-                reconstructions=reconstructions,
-                posterior=posterior,
+                inputs=inputs.detach(),
+                reconstructions=recons.detach(),
+                posterior=posterior.detach(),
                 optimizer_idx=1,
-                global_step=self.global_step
+                global_step=self.global_step,
+                split="val"
             )
 
-            # A) Summarize losses
+            # -- B4. Summarize losses ---------------------------------------
             log_dict = {**log_dict_gen, **log_dict_disc}
             total_loss = loss_gen + loss_disc
-        
+            
         elif isinstance(self.loss, SimpleVAELoss):
-            # B) Compute loss
+            # -- C1. Grab the optimizer -------------------------------------
+            opt_vae = self.optimizers()
+
+            # -- C2. Compute loss -------------------------------------------
             total_loss, log_dict = self.loss(
                 inputs=inputs,
-                reconstructions=reconstructions,
-                posterior=posterior
+                reconstructions=recons,
+                posterior=posterior,
+                split="val"
             )
-
+        
         else:
             raise ValueError("Invalid loss function: {}".format(type(self.loss)))
 
+
+        # -- 5. Logging -----------------------------------------------------
+        # Summarize losses
+        log_dict = {**log_gen, **log_disc}
+        total_loss = loss_gen + loss_disc
+
         # Log metrics
-        for k, v in log_dict.items():
-            self.log(f"val_{k}", v, prog_bar=True, on_step=False, on_epoch=True)
-        self.log("val_total_loss", total_loss, prog_bar=True, on_step=False, on_epoch=True)
+        self.log_dict(log_dict, prog_bar=False, on_step=False, on_epoch=True, sync_dist=True)
+        self.log("val/total_loss", total_loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
 
         return total_loss
 
+
     def configure_optimizers(self):
 
-        if isinstance(self.loss, VAEWithDiscriminator):
+        if isinstance(self.loss, (VAEWithDiscriminator, LPIPSWithDiscriminator)):
+            # Get relevant parameters for VAE and discriminator
+            disc_params = list(self.loss.discriminator.parameters())
+            disc_ids = set(id(p) for p in disc_params)
+            vae_params = [p for p in self.parameters() if id(p) not in disc_ids]
+
             # Use two optimizers for VAE and discriminator
             # First optimizer (generator / VAE)
             opt_vae = torch.optim.Adam(
-                self.parameters(), 
+                vae_params,
                 lr=self.learning_rate, 
                 betas=(0.5, 0.999)
             )
 
             # Second optimizer (discriminator)
             opt_disc = torch.optim.Adam(
-                self.parameters(), 
+                disc_params,
                 lr=self.learning_rate, 
                 betas=(0.5, 0.999)
             )
@@ -338,11 +473,6 @@ class LatentVQVAE(pl.LightningModule):
                     print(f"{context}: Restored training weights")
 
     def init_from_ckpt(self, path, ignore_keys=list()):
-        if ignore_keys is None:
-            ignore_keys = []
-        # always ignore EMA buffers
-        ignore_keys = ignore_keys + ["model_ema"]
-
         sd = torch.load(path, map_location="cpu")["state_dict"]
         keys = list(sd.keys())
         for k in keys:
@@ -378,7 +508,7 @@ class LatentVQVAE(pl.LightningModule):
         return dec
 
     def decode_code(self, code_b):
-        quant_b = self.quantize.embed_code(code_b)
+        quant_b = self.quantize(code_b)[0]
         dec = self.decode(quant_b)
         return dec
     

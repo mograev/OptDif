@@ -82,6 +82,10 @@ class DiagonalGaussianDistribution(object):
     def mode(self):
         """Compute the mode of the distribution."""
         return self.mean
+    
+    def detach(self):
+        """Detach the distribution from the computation graph."""
+        return DiagonalGaussianDistribution(self.parameters.detach(), self.deterministic)
 
 
 def normal_kl(mean1, logvar1, mean2, logvar2):

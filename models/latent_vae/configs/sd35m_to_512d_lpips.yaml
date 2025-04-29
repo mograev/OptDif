@@ -1,0 +1,27 @@
+ddconfig:
+    double_z: true
+    z_channels: 8
+    resolution: 32
+    in_channels: 16
+    out_ch: 16
+    ch: 64
+    ch_mult: [1, 2, 2]
+    num_res_blocks: 2
+    attn_resolutions: [16]
+    dropout: 0.0
+    attn_type: "vanilla"
+lossconfig:
+    target: "src.models.modules.losses.LPIPSWithDiscriminator"
+    params:
+        disc_start: 500
+        logvar_init: 0.0
+        rec_img_weight: 3.0
+        rec_lat_weight: 1.0
+        perceptual_weight: 2.0
+        kl_weight: 1.0e-4
+        disc_weight: 0.2
+        disc_num_layers: 3
+        disc_in_channels: 16
+        use_actnorm: true
+        disc_loss: "hinge"
+embed_dim: 512

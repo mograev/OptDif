@@ -1,11 +1,11 @@
 #!/bin/bash
 
-#SBATCH --job-name=train_latent_vae                 # Job name
-#SBATCH --output=logs/train_latent_vae_512d_%j.out  # Output log file
-#SBATCH --error=logs/train_latent_vae_512d_%j.err   # Error log file
-#SBATCH --time=12:00:00                             # Maximum runtime (hh:mm:ss)
-#SBATCH --partition=gpu_4_h100                      # Partition to submit the job to
-#SBATCH --gres=gpu                                  # Request GPU resources
+#SBATCH --job-name=train_latent_vae            # Job name
+#SBATCH --output=logs/train_latent_vae_%j.out  # Output log file
+#SBATCH --error=logs/train_latent_vae_%j.err   # Error log file
+#SBATCH --time=12:00:00                        # Maximum runtime (hh:mm:ss)
+#SBATCH --partition=gpu_h100                   # Partition to submit the job to
+#SBATCH --gres=gpu:4                           # Request GPU resources
 
 # Dataloader
 img_dir="data/ffhq/images1024x1024"
@@ -13,10 +13,10 @@ img_tensor_dir="data/ffhq/pt_images"
 attr_path="data/ffhq/ffhq_smile_scores.json"
 max_property_value=5
 min_property_value=0
-batch_size=128
+batch_size=32
 num_workers=8
 val_split=0.1
-device="cuda"
+data_device="cuda"
 
 # Weighter
 weight_type="uniform"
@@ -28,7 +28,7 @@ eval "$(conda shell.bash hook)"
 conda activate optdif1
 
 # Run the Python script with specified arguments (using srun for SLURM)
-srun python src/run/train_latent_vae_ffhq.py \
+PYTORCH_DISTRIBUTED_DEBUG=DETAIL python src/run/train_latent_vae_ffhq.py \
     --img_dir $img_dir \
     --img_tensor_dir $img_tensor_dir \
     --attr_path $attr_path \
@@ -38,6 +38,6 @@ srun python src/run/train_latent_vae_ffhq.py \
     --num_workers $num_workers \
     --val_split $val_split \
     --weight_type $weight_type \
-    --device $device \
+    --data_device $data_device \
     --aug
     "$@"

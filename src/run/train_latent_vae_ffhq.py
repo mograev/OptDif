@@ -31,7 +31,7 @@ if __name__ == "__main__":
     args.seed=42
     args.max_epochs=100
     args.model_output_dir="models/latent_vae"
-    args.latent_vae_config_path="models/latent_vae/configs/sd35m_to_512d.yaml"
+    args.latent_vae_config_path="models/latent_vae/configs/sd35m_to_512d_lpips.yaml"
 
     # Seed everything
     pl.seed_everything(args.seed)
@@ -53,8 +53,9 @@ if __name__ == "__main__":
         ddconfig=latent_vae_config["ddconfig"],
         lossconfig=latent_vae_config["lossconfig"],
         embed_dim=latent_vae_config["embed_dim"],
+        sd_vae_path="stabilityai/stable-diffusion-3.5-medium",
         ckpt_path=None,
-        monitor="val_total_loss",
+        monitor="val/total_loss",
     )
 
     # Progress bar
@@ -63,18 +64,20 @@ if __name__ == "__main__":
     # TensorBoard logger to log training progress
     tb_logger = pl.loggers.TensorBoardLogger(
         save_dir=args.model_output_dir,
-        version="version_9",
+        version="version_10",
         name="",
     )
 
     # Model checkpoint callback to save the best model
-    checkpointer = pl.callbacks.ModelCheckpoint(save_last=True, monitor="val_total_loss")
+    checkpointer = pl.callbacks.ModelCheckpoint(save_last=True, monitor="val/total_loss")
 
     # Enable PyTorch anomaly detection
     with torch.autograd.set_detect_anomaly(True):
         # Create trainer
         trainer = pl.Trainer(
-            accelerator="gpu" if args.device == "cuda" else "cpu",
+            accelerator="gpu",
+            devices=4,
+            strategy="ddp_find_unused_parameters_true", # required
             max_epochs=args.max_epochs,
             limit_train_batches=1.0,
             limit_val_batches=1.0,
