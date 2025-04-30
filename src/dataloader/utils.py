@@ -125,7 +125,6 @@ class MultiModeDataset(Dataset):
             if self.mode == 'img':
                 path = os.path.join(mode_dir, f"{name_without_ext}.png")
                 file = Image.open(path).convert("RGB")
-                file = transforms.ToTensor()(file)
             elif self.mode == 'img_tensor':
                 path = os.path.join(mode_dir, f"{name_without_ext}.pt")
                 file = torch.load(path, weights_only=False)
@@ -142,7 +141,7 @@ class MultiModeDataset(Dataset):
                 file = torch.load(path, weights_only=False)
 
             # Potentially apply transformations and encoding to images
-            if self.mode == 'img' or self.mode == 'img_tensor':
+            if self.mode == 'img': # or self.mode == 'img_tensor':
                 if self.transform:
                     file = self.transform(file)
                 if self.do_encode:

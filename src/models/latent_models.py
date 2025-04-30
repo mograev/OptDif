@@ -152,6 +152,7 @@ class LatentVAE(pl.LightningModule):
         # Move decoder to correct device if necessary
         self.sd_vae.to(latents.device)
         images = self.sd_vae.decode(latents).sample
+
         return images
     
     def training_step(self, batch, batch_idx):
@@ -268,7 +269,7 @@ class LatentVAE(pl.LightningModule):
 
         # -- 3. Logging -----------------------------------------------------
         # Log metrics
-        self.log_dict(log_dict, prog_bar=False, on_step=True, on_epoch=True, sync_dist=True)
+        self.log_dict(log_dict, prog_bar=False, on_step=True, on_epoch=False, sync_dist=True)
         self.log("train/total_loss", total_loss, prog_bar=False, on_step=True, on_epoch=True, sync_dist=True)
 
         return total_loss
@@ -386,19 +387,23 @@ class LatentVAE(pl.LightningModule):
             disc_ids = set(id(p) for p in disc_params)
             vae_params = [p for p in self.parameters() if id(p) not in disc_ids]
 
+            # Learning rates
+            lr_vae = self.learning_rate
+            lr_disc = 4 * lr_vae
+
             # Use two optimizers for VAE and discriminator
             # First optimizer (generator / VAE)
             opt_vae = torch.optim.Adam(
                 vae_params,
-                lr=self.learning_rate, 
+                lr=lr_vae, 
                 betas=(0.5, 0.999)
             )
 
             # Second optimizer (discriminator)
             opt_disc = torch.optim.Adam(
                 disc_params,
-                lr=self.learning_rate, 
-                betas=(0.5, 0.999)
+                lr=lr_disc, 
+                betas=(0.0, 0.999)
             )
 
             # Return both optimizers
@@ -416,6 +421,12 @@ class LatentVAE(pl.LightningModule):
     
     def get_last_layer(self):
         return self.decoder.conv_out if hasattr(self.decoder, 'conv_out') else None
+    
+    def on_train_epoch_end(self):
+        if self.global_rank == 0:
+            print(f"Epoch {self.current_epoch} finished. Total loss: {self.trainer.callback_metrics['val/total_loss']}")
+            
+        super().on_train_epoch_end()
     
 
 

@@ -42,7 +42,7 @@ if __name__ == "__main__":
 
     # Load data
     datamodule = FFHQWeightedDataset(args, DataWeighter(args), sd_vae)
-    datamodule.set_mode("img_tensor")
+    datamodule.set_mode("img")
 
     # Load latent VAE config
     with open(args.latent_vae_config_path, "r") as f:
@@ -64,7 +64,7 @@ if __name__ == "__main__":
     # TensorBoard logger to log training progress
     tb_logger = pl.loggers.TensorBoardLogger(
         save_dir=args.model_output_dir,
-        version="version_10",
+        version="version_13",
         name="",
     )
 
@@ -76,11 +76,12 @@ if __name__ == "__main__":
         # Create trainer
         trainer = pl.Trainer(
             accelerator="gpu",
-            devices=4,
+            devices=2,
             strategy="ddp_find_unused_parameters_true", # required
             max_epochs=args.max_epochs,
             limit_train_batches=1.0,
-            limit_val_batches=1.0,
+            limit_val_batches=0.2,
+            val_check_interval=200,
             logger=tb_logger,
             callbacks=[checkpointer],
             enable_progress_bar=False

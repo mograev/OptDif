@@ -60,9 +60,15 @@ class FFHQWeightedDataset(pl.LightningDataModule):
         # Whether to perform image augmentation
         self.aug = args.aug
         if self.aug:
+            # self.transform = transforms.Compose([
+            # transforms.RandomHorizontalFlip(p=0.5),
+            # transforms.RandomResizedCrop(size=256, scale=(0.8, 1.0))
+            # ])
             self.transform = transforms.Compose([
-            transforms.RandomHorizontalFlip(p=0.5),
-            transforms.RandomResizedCrop(size=256, scale=(0.8, 1.0))
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.RandomResizedCrop(size=256, scale=(0.8, 1.0)),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
             ])
         else:
             self.transform = None

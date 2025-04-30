@@ -14,6 +14,16 @@ from taming.modules.losses.lpips import LPIPS
 from taming.modules.losses.vqperceptual import adopt_weight, hinge_d_loss, vanilla_d_loss
 
 
+def hinge_d_loss_with_r1(logits_real, logits_fake, real_imgs, gamma=5.0):
+    loss = torch.mean(F.relu(1. - logits_real)) + torch.mean(F.relu(1. + logits_fake))
+    grad_real = torch.autograd.grad(
+        outputs=logits_real.sum(), inputs=real_imgs,
+        create_graph=True
+    )[0]
+    r1 = 0.5 * gamma * grad_real.view(grad_real.size(0), -1).pow(2).sum(1).mean()
+    return loss + r1
+
+
 class LPIPSWithDiscriminator(nn.Module):
     def __init__(
         self,
@@ -31,7 +41,7 @@ class LPIPSWithDiscriminator(nn.Module):
     ):
 
         super().__init__()
-        assert disc_loss in ["hinge", "vanilla"]
+        assert disc_loss in ["hinge", "vanilla", "hinge_r1"]
 
         # Store loss weights
         self.rec_img_weight = rec_img_weight
@@ -53,7 +63,15 @@ class LPIPSWithDiscriminator(nn.Module):
             use_actnorm=use_actnorm
         ).apply(weights_init)
         self.discriminator_iter_start = disc_start
-        self.discriminator_loss = hinge_d_loss if disc_loss == "hinge" else vanilla_d_loss
+        
+        # Discriminator loss
+        if disc_loss == "hinge":
+            self.discriminator_loss = hinge_d_loss
+        elif disc_loss == "vanilla":
+            self.discriminator_loss = vanilla_d_loss
+        elif disc_loss == "hinge_r1":
+            # Use R1 regularization
+            self.discriminator_loss = hinge_d_loss_with_r1
 
     def calculate_adaptive_weight(self, nll_loss, gen_loss, last_layer):
         # If last_layer is a module, extract its first parameter (typically the weight)
@@ -124,10 +142,20 @@ class LPIPSWithDiscriminator(nn.Module):
 
         if optimizer_idx == 1:
             # ---- Discriminator update --------------------------------------
-            logits_real = self.discriminator(inputs.contiguous().detach())
-            logits_fake = self.discriminator(recons.contiguous().detach())
 
-            disc_loss = self.discriminator_loss(logits_real, logits_fake)
+            if self.discriminator_loss is hinge_d_loss_with_r1:
+                # Use R1 regularization
+                with torch.enable_grad():                      # ensure grads even in eval/val
+                    real_imgs = inputs.contiguous().detach()
+                    real_imgs.requires_grad_(True)             # needed for R1 term
+                    logits_real = self.discriminator(real_imgs)
+                    logits_fake = self.discriminator(recons.contiguous().detach())
+                    disc_loss = self.discriminator_loss(logits_real, logits_fake, real_imgs)
+            else:
+                logits_real = self.discriminator(inputs.contiguous().detach())
+                logits_fake = self.discriminator(recons.contiguous().detach())
+                disc_loss = self.discriminator_loss(logits_real, logits_fake)
+            
             loss = disc_active * disc_loss
 
             log = {
