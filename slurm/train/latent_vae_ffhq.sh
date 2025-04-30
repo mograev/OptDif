@@ -22,8 +22,8 @@ data_device="cuda"
 weight_type="uniform"
 
 # Clear interfering Python paths (when using JupyterHub)
-unset PYTHONPATH
-export PYTHONPATH=/pfs/work9/workspace/scratch/ma_mgraevin-optdif:$PYTHONPATH
+#unset PYTHONPATH
+#export PYTHONPATH=/pfs/work9/workspace/scratch/ma_mgraevin-optdif:$PYTHONPATH
 
 # Initialize Conda for the current shell
 eval "$(conda shell.bash hook)"
@@ -32,7 +32,7 @@ eval "$(conda shell.bash hook)"
 conda activate optdif1
 
 # Run the Python script with specified arguments (using srun for SLURM)
-PYTORCH_DISTRIBUTED_DEBUG=DETAIL python src/run/train_latent_vae_ffhq_double.py \
+PYTORCH_DISTRIBUTED_DEBUG=DETAIL python src/run/train_latent_vae_ffhq.py \
     --img_dir $img_dir \
     --img_tensor_dir $img_tensor_dir \
     --attr_path $attr_path \
