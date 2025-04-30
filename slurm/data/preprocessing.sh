@@ -1,9 +1,8 @@
 #!/bin/bash
 
 #SBATCH --job-name=preprocessing                                    # Job name
-#SBATCH --chdir=/pfs/work9/workspace/scratch/ma_mgraevin-optdif     # Working directory
-#SBATCH --output=logs/preprocessing_%j.out                          # Output log file
-#SBATCH --error=logs/preprocessing_%j.err                           # Error log file
+#SBATCH --output=logs/preprocessing/%j.out                          # Output log file
+#SBATCH --error=logs/preprocessing/%j.err                           # Error log file
 #SBATCH --time=03:00:00                                             # Maximum runtime (hh:mm:ss)
 #SBATCH --partition=cpu                                             # Partition to submit the job to
 #SBATCH --ntasks=1                                                  # Number of tasks (processes)

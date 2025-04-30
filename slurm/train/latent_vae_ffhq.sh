@@ -1,11 +1,11 @@
 #!/bin/bash
 
-#SBATCH --job-name=train_latent_vae            # Job name
-#SBATCH --output=logs/train_latent_vae_%j.out  # Output log file
-#SBATCH --error=logs/train_latent_vae_%j.err   # Error log file
-#SBATCH --time=12:00:00                        # Maximum runtime (hh:mm:ss)
-#SBATCH --partition=gpu_h100                   # Partition to submit the job to
-#SBATCH --gres=gpu:4                           # Request GPU resources
+#SBATCH --job-name=train_latent_vae      # Job name
+#SBATCH --output=logs/latent_vae/%j.out  # Output log file
+#SBATCH --error=logs/latent_vae/%j.err   # Error log file
+#SBATCH --time=4:00:00                   # Maximum runtime (hh:mm:ss)
+#SBATCH --partition=gpu_a100_il          # Partition to submit the job to
+#SBATCH --gres=gpu:4                     # Request GPU resources
 
 # Dataloader
 img_dir="data/ffhq/images1024x1024"
@@ -21,6 +21,10 @@ data_device="cuda"
 # Weighter
 weight_type="uniform"
 
+# Clear interfering Python paths (when using JupyterHub)
+unset PYTHONPATH
+export PYTHONPATH=/pfs/work9/workspace/scratch/ma_mgraevin-optdif:$PYTHONPATH
+
 # Initialize Conda for the current shell
 eval "$(conda shell.bash hook)"
 
@@ -28,7 +32,7 @@ eval "$(conda shell.bash hook)"
 conda activate optdif1
 
 # Run the Python script with specified arguments (using srun for SLURM)
-PYTORCH_DISTRIBUTED_DEBUG=DETAIL python src/run/train_latent_vae_ffhq.py \
+PYTORCH_DISTRIBUTED_DEBUG=DETAIL python src/run/train_latent_vae_ffhq_double.py \
     --img_dir $img_dir \
     --img_tensor_dir $img_tensor_dir \
     --attr_path $attr_path \
