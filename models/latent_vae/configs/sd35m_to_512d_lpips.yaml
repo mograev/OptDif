@@ -13,15 +13,16 @@ ddconfig:
 lossconfig:
     target: "src.models.modules.losses.LPIPSWithDiscriminator"
     params:
-        disc_start: 500
+        disc_start: 50001
         logvar_init: 0.0
-        rec_img_weight: 2.0
+        rec_img_weight: 1.0
         rec_lat_weight: 1.0
-        perceptual_weight: 2.0
-        kl_weight: 1.0e-3
+        perceptual_weight: 1.0
+        kl_weight: 0.000001
         disc_weight: 0.5
         disc_num_layers: 3
         disc_in_channels: 16
         use_actnorm: false
         disc_loss: "hinge_r1" # hinge or hinge_r1
 embed_dim: 512
+learning_rate: 4.5e-6

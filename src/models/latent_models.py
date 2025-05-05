@@ -22,6 +22,7 @@ class LatentVAE(pl.LightningModule):
                  ddconfig,
                  lossconfig,
                  embed_dim,
+                 learning_rate=1e-4,
                  sd_vae_path=None,
                  ckpt_path=None,
                  ignore_keys=[],
@@ -100,7 +101,7 @@ class LatentVAE(pl.LightningModule):
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
         self.save_hyperparameters()
-        self.learning_rate = 1e-4
+        self.learning_rate = learning_rate
 
     def init_from_ckpt(self, path, ignore_keys=list()):
         sd = torch.load(path, map_location="cpu")["state_dict"]
@@ -295,7 +296,7 @@ class LatentVAE(pl.LightningModule):
         # -- 1. Get data ----------------------------------------------------
         # Get inputs & reconstructions
         inputs = self.get_input(batch)
-        recons, posterior = self(inputs)
+        recons, posterior = self(inputs, sample_posterior=False)
 
         # Get the last layer of the decoder for adaptive loss
         last_layer = self.get_last_layer()

@@ -52,8 +52,6 @@ if __name__ == "__main__":
     datamodule = FFHQWeightedDataset(args, DataWeighter(args), sd_vae)
     datamodule.set_mode("img")
 
-
-
     # -- Initialize FID and Spectral metric ----------------------- #
 
     # Initialize instances
@@ -88,6 +86,7 @@ if __name__ == "__main__":
         ddconfig=latent_vae_config["ddconfig"],
         lossconfig=latent_vae_config["lossconfig"],
         embed_dim=latent_vae_config["embed_dim"],
+        learning_rate=latent_vae_config["learning_rate"],
         sd_vae_path="stabilityai/stable-diffusion-3.5-medium",
         ckpt_path=None,
         monitor="val/total_loss",
@@ -103,7 +102,7 @@ if __name__ == "__main__":
     # TensorBoard logger to log training progress
     tb_logger = pl.loggers.TensorBoardLogger(
         save_dir=args.model_output_dir,
-        version="version_14",
+        version="version_15",
         name="",
     )
 
@@ -115,12 +114,12 @@ if __name__ == "__main__":
         # Create trainer
         trainer = pl.Trainer(
             accelerator="gpu",
-            devices=2,
+            devices=4,
             strategy="ddp_find_unused_parameters_true", # required
             max_epochs=args.max_epochs,
             limit_train_batches=1.0,
-            limit_val_batches=0.2,
-            val_check_interval=200,
+            limit_val_batches=0.5,
+            #val_check_interval=200,
             logger=tb_logger,
             callbacks=[checkpointer],
             enable_progress_bar=False
