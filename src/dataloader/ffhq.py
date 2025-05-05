@@ -266,6 +266,6 @@ class FFHQWeightedDataset(pl.LightningDataModule):
             batch_size=self.batch_size,
             num_workers=self.num_workers,
             sampler=self.val_sampler,
-            drop_last=False,
+            drop_last=True,
             persistent_workers=True if self.num_workers > 0 else False,
         )

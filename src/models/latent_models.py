@@ -1,4 +1,5 @@
 from contextlib import contextmanager
+from tqdm import tqdm
 
 import torch
 from torch.optim.lr_scheduler import LambdaLR
@@ -13,6 +14,7 @@ from src.models.modules.quantize import VectorQuantizer2 as VectorQuantizer
 from src.models.modules.utils import instantiate_from_config
 from src.models.modules.losses import SimpleVAELoss, VAEWithDiscriminator, LPIPSWithDiscriminator
 from src.models.modules.ema import LitEma
+from src.metrics.fid import FIDScore
 
 
 class LatentVAE(pl.LightningModule):
@@ -24,6 +26,8 @@ class LatentVAE(pl.LightningModule):
                  ckpt_path=None,
                  ignore_keys=[],
                  monitor=None,
+                 fid_instance=None,
+                 spectral_instance=None,
                  ):
         """
         LatentVAE is a modified version of the AutoencoderKL that processes latents instead of images.
@@ -33,10 +37,12 @@ class LatentVAE(pl.LightningModule):
             ddconfig: Configuration for the encoder and decoder.
             lossconfig: Configuration for the loss function.
             embed_dim: The dimensionality of the flat latent space (e.g. 128).
-            input_channels: Number of channels in the input latents.
+            sd_vae_path: Path to the Stable Diffusion VAE model for perceptual loss.
             ckpt_path: Path to a checkpoint to load weights from.
             ignore_keys: Keys to ignore when loading weights from the checkpoint.
             monitor: Metric to monitor for early stopping or model selection.
+            fid_instance: Instance of the FID metric for evaluation.
+            spectral_instance: Instance of the Spectral metric for evaluation.
         """
         super().__init__()
         self.embed_dim = embed_dim
@@ -45,8 +51,9 @@ class LatentVAE(pl.LightningModule):
         self.encoder = Encoder(**ddconfig)
         self.decoder = Decoder(**ddconfig)
 
-        # Create loss function
-        self.loss = instantiate_from_config(lossconfig)
+        # Configs (initialized in setup)
+        self.lossconfig = lossconfig
+        self.sd_vae_path = sd_vae_path
 
         # Manual optimization to allow multiple optimizers
         self.automatic_optimization = False
@@ -70,9 +77,21 @@ class LatentVAE(pl.LightningModule):
             torch.nn.Unflatten(1, (ddconfig["z_channels"], bottleneck_resolution, bottleneck_resolution))  # Reshape to spatial
         )
 
-        if sd_vae_path:
+        # FID metric
+        self.fid_instance = fid_instance
+        self.track_fid = bool(self.fid_instance is not None)
+
+        # Spectral metric
+        self.spectral_instance = spectral_instance
+        self.track_spectral = bool(self.spectral_instance is not None)
+
+        # Setup loss function
+        self.loss = instantiate_from_config(self.lossconfig)
+
+        # Load stable diffusion VAE for perceptual loss
+        if isinstance(self.loss, LPIPSWithDiscriminator):
             # Load weights from a pre-trained Stable Diffusion VAE
-            self.sd_vae = AutoencoderKL.from_pretrained(sd_vae_path, subfolder="vae")
+            self.sd_vae = AutoencoderKL.from_pretrained(self.sd_vae_path, subfolder="vae")
             self.sd_vae.eval()
             self.sd_vae.requires_grad_(False)
 
@@ -168,12 +187,9 @@ class LatentVAE(pl.LightningModule):
 
         if isinstance(self.loss, LPIPSWithDiscriminator):
             # -- A1. Decode latents to images -------------------------------
-            try:
-                with torch.no_grad():
-                    inputs_img = self.latents_to_images(inputs)
-                    recons_img = self.latents_to_images(recons)
-            except AttributeError:
-                raise RuntimeError("latents_to_images() called but sd_vae is not initialized.")
+            with torch.no_grad():
+                inputs_img = self.latents_to_images(inputs)
+                recons_img = self.latents_to_images(recons)
 
             # -- A2. Grab the two optimizers --------------------------------
             opt_vae, opt_disc = self.optimizers()
@@ -288,17 +304,15 @@ class LatentVAE(pl.LightningModule):
 
         if isinstance(self.loss, LPIPSWithDiscriminator):
             # -- A1. Decode latents to images -------------------------------
-            try:
-                with torch.no_grad():
-                    inputs_img = self.latents_to_images(inputs)
-                    recons_img = self.latents_to_images(recons)
-            except AttributeError:
-                raise RuntimeError("latents_to_images() called but sd_vae is not initialized.")
+            with torch.no_grad():
+                inputs_img = self.latents_to_images(inputs)
+                recons_img = self.latents_to_images(recons)
+            
+            # Store reconstructed images for FID or Spectral calculation
+            if self.track_fid or self.track_spectral:
+                self._val_recons_img.append(recons_img)
 
-            # -- A2. Grab the two optimizers --------------------------------
-            opt_vae, opt_disc = self.optimizers()
-
-            # -- A3. Generator / VAE loss (optimizer_idx = 0) ---------------
+            # -- A2. Generator / VAE loss (optimizer_idx = 0) ---------------
             loss_gen, log_gen = self.loss(
                 inputs, recons,
                 inputs_img, recons_img,
@@ -309,7 +323,7 @@ class LatentVAE(pl.LightningModule):
                 split="val"
             )
 
-            # -- A4. Discriminator loss (optimizer_idx = 1) -----------------
+            # -- A3. Discriminator loss (optimizer_idx = 1) -----------------
             loss_disc, log_disc = self.loss(
                 inputs.detach(), recons.detach(),
                 inputs_img.detach(), recons_img.detach(),
@@ -319,15 +333,13 @@ class LatentVAE(pl.LightningModule):
                 split="val"
             )
 
-            # -- A5. Summarize losses ---------------------------------------
+            # -- A4. Summarize losses ---------------------------------------
             log_dict = {**log_gen, **log_disc}
             total_loss = loss_gen + loss_disc
 
         elif isinstance(self.loss, VAEWithDiscriminator):
-            # -- B1. Grab the two optimizers --------------------------------
-            opt_vae, opt_disc = self.optimizers()
 
-            # -- B2. Generator / VAE update (optimizer_idx = 0) -------------
+            # -- B1. Generator / VAE update (optimizer_idx = 0) -------------
             loss_gen, log_dict_gen = self.loss(
                 inputs=inputs,
                 reconstructions=recons,
@@ -337,7 +349,7 @@ class LatentVAE(pl.LightningModule):
                 split="val"
             )
 
-            # -- B3. Discriminator update (optimizer_idx = 1) ---------------
+            # -- B2. Discriminator update (optimizer_idx = 1) ---------------
             loss_disc, log_dict_disc = self.loss(
                 inputs=inputs.detach(),
                 reconstructions=recons.detach(),
@@ -347,15 +359,13 @@ class LatentVAE(pl.LightningModule):
                 split="val"
             )
 
-            # -- B4. Summarize losses ---------------------------------------
+            # -- B3. Summarize losses ---------------------------------------
             log_dict = {**log_dict_gen, **log_dict_disc}
             total_loss = loss_gen + loss_disc
             
         elif isinstance(self.loss, SimpleVAELoss):
-            # -- C1. Grab the optimizer -------------------------------------
-            opt_vae = self.optimizers()
 
-            # -- C2. Compute loss -------------------------------------------
+            # -- C1. Compute loss -------------------------------------------
             total_loss, log_dict = self.loss(
                 inputs=inputs,
                 reconstructions=recons,
@@ -367,7 +377,7 @@ class LatentVAE(pl.LightningModule):
             raise ValueError("Invalid loss function: {}".format(type(self.loss)))
 
 
-        # -- 5. Logging -----------------------------------------------------
+        # -- 3. Logging -----------------------------------------------------
         # Summarize losses
         log_dict = {**log_gen, **log_disc}
         total_loss = loss_gen + loss_disc
@@ -421,13 +431,55 @@ class LatentVAE(pl.LightningModule):
     
     def get_last_layer(self):
         return self.decoder.conv_out if hasattr(self.decoder, 'conv_out') else None
-    
-    def on_train_epoch_end(self):
+
+    def on_validation_epoch_start(self):
+        if self.track_fid or self.track_spectral:
+            # Initialize list to store reconstructed images for metric calculation
+            self._val_recons_img = []
+
+        return super().on_validation_epoch_start()
+
+    def on_validation_epoch_end(self):
+        # Skip logging if sanity checking
+        if self.trainer.sanity_checking:
+            return super().on_validation_epoch_end()
+
+        # -- Validation loss -------------------------------------- #
         if self.global_rank == 0:
-            print(f"Epoch {self.current_epoch} finished. Total loss: {self.trainer.callback_metrics['val/total_loss']}")
-            
-        super().on_train_epoch_end()
+            print(f"Epoch {self.current_epoch}")
+            print(f"~ Validation loss: {self.trainer.callback_metrics['val/total_loss']}")
+
+        # -- FID & Spectral score --------------------------------- #
+        if self.track_fid or self.track_spectral:
+            # Concatenate all batches of reconstructed images
+            recon_img = torch.cat(self._val_recons_img, dim=0)
+
+            # Gather from all GPUs
+            recon_img_all = self.all_gather(recon_img)
+
+            if self.global_rank == 0:
+                # Reshape gathered tensor (world_size, batch, C, H, W) into a single batch dimension
+                recon_img = recon_img_all.flatten(0, 1)
+                
+                if self.track_fid:
+                    # Compute FID score on the reconstructed images
+                    fid_score = self.fid_instance.compute_score_from_data(recon_img, eps=1E-6)
+
+                    # Log FID score
+                    print(f"~ FID score: {fid_score}")
+                    self.log("val/fid_score", fid_score, prog_bar=False, on_step=False, on_epoch=True, sync_dist=False)
+
+                if self.track_spectral:
+                    # Compute Spectral score on the reconstructed images
+                    spectral_score = self.spectral_instance.compute_score_from_data(recon_img, eps=1E-6)
+
+                    # Log Spectral score
+                    print(f"~ Spectral score: {spectral_score}")
+                    self.log("val/spectral_score", spectral_score, prog_bar=False, on_step=False, on_epoch=True, sync_dist=False)
+
+        super().on_validation_epoch_end()
     
+
 
 
 class LatentVQVAE(pl.LightningModule):

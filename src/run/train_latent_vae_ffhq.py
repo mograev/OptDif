@@ -4,10 +4,14 @@ import logging
 
 import torch
 import pytorch_lightning as pl
+from torchvision import transforms
 
 from src.dataloader.ffhq import FFHQWeightedDataset
 from src.dataloader.weighting import DataWeighter
 from src.models.latent_models import LatentVAE
+from src.metrics.fid import FIDScore
+from src.metrics.spectral import SpectralScore
+from src.dataloader.utils import MultiModeDataset
 
 from diffusers import AutoencoderKL
 
@@ -20,6 +24,8 @@ torch.set_float32_matmul_precision("medium")
 
 if __name__ == "__main__":
     mp.set_start_method("spawn", force=True)
+
+    # -- Parse arguments ------------------------------------------ #
 
     # Parse arguments for external configuration
     parser = argparse.ArgumentParser()
@@ -36,6 +42,8 @@ if __name__ == "__main__":
     # Seed everything
     pl.seed_everything(args.seed)
 
+    # -- Load Data module ----------------------------------------- #
+
     # Load SD-VAE model
     sd_vae = AutoencoderKL.from_pretrained("stabilityai/stable-diffusion-3.5-medium", subfolder="vae")
     sd_vae.eval()
@@ -43,6 +51,33 @@ if __name__ == "__main__":
     # Load data
     datamodule = FFHQWeightedDataset(args, DataWeighter(args), sd_vae)
     datamodule.set_mode("img")
+
+
+
+    # -- Initialize FID and Spectral metric ----------------------- #
+
+    # Initialize instances
+    fid_instance = FIDScore(img_size=256, device="cuda")
+    spectral_instance = SpectralScore(img_size=256, device="cuda")
+
+    # Load validation dataset (workaround)
+    val_filename_list = datamodule.val_dataloader().dataset.filename_list
+    val_dataset = MultiModeDataset(
+        val_filename_list,
+        mode_dirs={"img": args.img_dir},
+        transform=transforms.Compose([
+            transforms.Resize((256, 256)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        ]),
+    )
+    val_dataset.set_mode("img")
+
+    # Fit metrics
+    fid_instance.fit_real(val_dataset)
+    spectral_instance.fit_real(val_dataset)
+
+    # -- Load LatentVAE model ------------------------------------- #
 
     # Load latent VAE config
     with open(args.latent_vae_config_path, "r") as f:
@@ -56,7 +91,11 @@ if __name__ == "__main__":
         sd_vae_path="stabilityai/stable-diffusion-3.5-medium",
         ckpt_path=None,
         monitor="val/total_loss",
+        fid_instance=fid_instance,
+        spectral_instance=spectral_instance,
     )
+
+    # -- Initialize and run trainer ------------------------------- #
 
     # Progress bar
     pl._logger.setLevel(logging.INFO)
@@ -64,7 +103,7 @@ if __name__ == "__main__":
     # TensorBoard logger to log training progress
     tb_logger = pl.loggers.TensorBoardLogger(
         save_dir=args.model_output_dir,
-        version="version_13",
+        version="version_14",
         name="",
     )
 

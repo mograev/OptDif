@@ -27,3 +27,5 @@ __pycache__/
 *.pyo
 *.pyd
 logs/
+*.cache
+.ipynb_checkpoints
