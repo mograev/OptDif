@@ -13,7 +13,7 @@ ddconfig:
 lossconfig:
     target: "src.models.modules.losses.LPIPSWithDiscriminator"
     params:
-        disc_start: 50001
+        disc_start: 20001
         logvar_init: 0.0
         rec_img_weight: 1.0
         rec_lat_weight: 1.0

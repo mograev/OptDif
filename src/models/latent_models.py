@@ -78,6 +78,8 @@ class LatentVAE(pl.LightningModule):
             torch.nn.Unflatten(1, (ddconfig["z_channels"], bottleneck_resolution, bottleneck_resolution))  # Reshape to spatial
         )
 
+        self.save_hyperparameters()
+
         # FID metric
         self.fid_instance = fid_instance
         self.track_fid = bool(self.fid_instance is not None)
@@ -90,7 +92,7 @@ class LatentVAE(pl.LightningModule):
         self.loss = instantiate_from_config(self.lossconfig)
 
         # Load stable diffusion VAE for perceptual loss
-        if isinstance(self.loss, LPIPSWithDiscriminator):
+        if self.sd_vae_path is not None:
             # Load weights from a pre-trained Stable Diffusion VAE
             self.sd_vae = AutoencoderKL.from_pretrained(self.sd_vae_path, subfolder="vae")
             self.sd_vae.eval()
@@ -100,11 +102,10 @@ class LatentVAE(pl.LightningModule):
             self.monitor = monitor
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
-        self.save_hyperparameters()
         self.learning_rate = learning_rate
 
     def init_from_ckpt(self, path, ignore_keys=list()):
-        sd = torch.load(path, map_location="cpu")["state_dict"]
+        sd = torch.load(path, map_location="cpu", weights_only=False)["state_dict"]
         keys = list(sd.keys())
         for k in keys:
             for ik in ignore_keys:
@@ -311,7 +312,9 @@ class LatentVAE(pl.LightningModule):
             
             # Store reconstructed images for FID or Spectral calculation
             if self.track_fid or self.track_spectral:
-                self._val_recons_img.append(recons_img)
+                # store reconstruction on CPU to save GPU memory
+                self._val_recons_img.append(recons_img.cpu())
+                del recons_img  # free GPU memory right away
 
             # -- A2. Generator / VAE loss (optimizer_idx = 0) ---------------
             loss_gen, log_gen = self.loss(

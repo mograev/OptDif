@@ -3,7 +3,7 @@
 #SBATCH --job-name=train_latent_vae      # Job name
 #SBATCH --output=logs/latent_vae/%j.out  # Output log file
 #SBATCH --error=logs/latent_vae/%j.err   # Error log file
-#SBATCH --time=1:00:00                   # Maximum runtime (hh:mm:ss)
+#SBATCH --time=2:00:00                   # Maximum runtime (hh:mm:ss)
 #SBATCH --partition=gpu_a100_il          # Partition to submit the job to
 #SBATCH --gres=gpu:4                     # Request GPU resources
 
@@ -22,8 +22,8 @@ data_device="cuda"
 weight_type="uniform"
 
 # Clear interfering Python paths (when using JupyterHub)
-unset PYTHONPATH
-export PYTHONPATH=/pfs/work9/workspace/scratch/ma_mgraevin-optdif:$PYTHONPATH
+#unset PYTHONPATH
+#export PYTHONPATH=/pfs/work9/workspace/scratch/ma_mgraevin-optdif:$PYTHONPATH
 
 # Initialize Conda for the current shell
 eval "$(conda shell.bash hook)"
