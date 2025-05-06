@@ -2,6 +2,7 @@ from contextlib import contextmanager
 from tqdm import tqdm
 
 import torch
+from torch import nn
 from torch.optim.lr_scheduler import LambdaLR
 import pytorch_lightning as pl
 
@@ -297,7 +298,7 @@ class LatentVAE(pl.LightningModule):
         # -- 1. Get data ----------------------------------------------------
         # Get inputs & reconstructions
         inputs = self.get_input(batch)
-        recons, posterior = self(inputs, sample_posterior=False)
+        recons, posterior = self(inputs)
 
         # Get the last layer of the decoder for adaptive loss
         last_layer = self.get_last_layer()
@@ -314,7 +315,6 @@ class LatentVAE(pl.LightningModule):
             if self.track_fid or self.track_spectral:
                 # store reconstruction on CPU to save GPU memory
                 self._val_recons_img.append(recons_img.cpu())
-                del recons_img  # free GPU memory right away
 
             # -- A2. Generator / VAE loss (optimizer_idx = 0) ---------------
             loss_gen, log_gen = self.loss(
@@ -483,6 +483,75 @@ class LatentVAE(pl.LightningModule):
 
         super().on_validation_epoch_end()
     
+
+
+class LatentLinearAE(pl.LightningModule):
+    """
+    Maps a 16x32x32 = 16384d SD-latent tensor to 512d and back with two
+    linear layers.
+    """
+    def __init__(self, lr=1e-4):
+        super().__init__()
+        self.lr = lr
+
+        D_IN   = 16 * 32 * 32          # = 16384
+        D_MID  = 512
+
+        self.encoder = nn.Linear(D_IN, D_MID, bias=True)
+        self.decoder = nn.Linear(D_MID, D_IN, bias=True)
+
+        self.loss_fn = nn.MSELoss()
+
+
+    # -------------
+    # encode/decode
+    # -------------
+    def encode(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        (B,16,32,32) → (B,512)
+        """
+        return self.encoder(self._flatten(x))
+
+    def decode(self, z: torch.Tensor) -> torch.Tensor:
+        """
+        (B,512) → (B,16,32,32)
+        """
+        return self._unflatten(self.decoder(z))
+
+    # -------------
+    # core helpers
+    # -------------
+    def _flatten(self, x):        # (B,C,H,W) → (B,D_IN)
+        return x.flatten(start_dim=1)
+
+    def _unflatten(self, z):      # (B,D_IN) → (B,16,32,32)
+        return z.view(-1, 16, 32, 32)
+
+    # -------------
+    # forward path
+    # -------------
+    def forward(self, x):
+        z = self.encoder(self._flatten(x))   # (B,512)
+        x_hat = self._unflatten(self.decoder(z))  # (B,16,32,32)
+        return x_hat
+
+    # -------------
+    # Lightning bits
+    # -------------
+    def training_step(self, batch, _):
+        x = batch.float()
+        x_hat = self(x)
+        loss = self.loss_fn(x_hat, x)
+        self.log("train_loss", loss, prog_bar=True)
+        return loss
+
+    def validation_step(self, batch, _):
+        x = batch.float()
+        loss = self.loss_fn(self(x), x)
+        self.log("val_loss", loss, prog_bar=True)
+
+    def configure_optimizers(self):
+        return torch.optim.Adam(self.parameters(), lr=self.lr)
 
 
 
