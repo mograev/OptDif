@@ -3,6 +3,7 @@ from tqdm import tqdm
 
 import torch
 from torch import nn
+import torch.distributed as dist
 from torch.optim.lr_scheduler import LambdaLR
 import pytorch_lightning as pl
 
@@ -39,6 +40,7 @@ class LatentVAE(pl.LightningModule):
             ddconfig: Configuration for the encoder and decoder.
             lossconfig: Configuration for the loss function.
             embed_dim: The dimensionality of the flat latent space (e.g. 128).
+            learning_rate: Learning rate for the optimizer.
             sd_vae_path: Path to the Stable Diffusion VAE model for perceptual loss.
             ckpt_path: Path to a checkpoint to load weights from.
             ignore_keys: Keys to ignore when loading weights from the checkpoint.
@@ -48,6 +50,7 @@ class LatentVAE(pl.LightningModule):
         """
         super().__init__()
         self.embed_dim = embed_dim
+        self.learning_rate = learning_rate
         
         # Create encoder/decoder for variational autoencoder
         self.encoder = Encoder(**ddconfig)
@@ -79,8 +82,6 @@ class LatentVAE(pl.LightningModule):
             torch.nn.Unflatten(1, (ddconfig["z_channels"], bottleneck_resolution, bottleneck_resolution))  # Reshape to spatial
         )
 
-        self.save_hyperparameters()
-
         # FID metric
         self.fid_instance = fid_instance
         self.track_fid = bool(self.fid_instance is not None)
@@ -101,9 +102,20 @@ class LatentVAE(pl.LightningModule):
 
         if monitor is not None:
             self.monitor = monitor
+
+        self.save_hyperparameters(
+            "ddconfig",
+            "lossconfig",
+            "embed_dim",
+            "sd_vae_path",
+            "ckpt_path",
+            "ignore_keys",
+            "monitor",
+            "learning_rate",
+        )
+
         if ckpt_path is not None:
             self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
-        self.learning_rate = learning_rate
 
     def init_from_ckpt(self, path, ignore_keys=list()):
         sd = torch.load(path, map_location="cpu", weights_only=False)["state_dict"]
@@ -313,7 +325,6 @@ class LatentVAE(pl.LightningModule):
             
             # Store reconstructed images for FID or Spectral calculation
             if self.track_fid or self.track_spectral:
-                # store reconstruction on CPU to save GPU memory
                 self._val_recons_img.append(recons_img.cpu())
 
             # -- A2. Generator / VAE loss (optimizer_idx = 0) ---------------
@@ -447,10 +458,10 @@ class LatentVAE(pl.LightningModule):
         # Skip logging if sanity checking
         if self.trainer.sanity_checking:
             return super().on_validation_epoch_end()
-
+        
         # -- Validation loss -------------------------------------- #
         if self.global_rank == 0:
-            print(f"Epoch {self.current_epoch}")
+            print(f"Epoch {self.current_epoch}:")
             print(f"~ Validation loss: {self.trainer.callback_metrics['val/total_loss']}")
 
         # -- FID & Spectral score --------------------------------- #
@@ -458,12 +469,12 @@ class LatentVAE(pl.LightningModule):
             # Concatenate all batches of reconstructed images
             recon_img = torch.cat(self._val_recons_img, dim=0)
 
-            # Gather from all GPUs
-            recon_img_all = self.all_gather(recon_img)
+            # Gather from all ranks, but keep on CPU
+            gathered = [None] * dist.get_world_size()
+            dist.all_gather_object(gathered, recon_img)
+            recon_img = torch.cat(gathered, dim=0)
 
             if self.global_rank == 0:
-                # Reshape gathered tensor (world_size, batch, C, H, W) into a single batch dimension
-                recon_img = recon_img_all.flatten(0, 1)
                 
                 if self.track_fid:
                     # Compute FID score on the reconstructed images
@@ -480,6 +491,11 @@ class LatentVAE(pl.LightningModule):
                     # Log Spectral score
                     print(f"~ Spectral score: {spectral_score}")
                     self.log("val/spectral_score", spectral_score, prog_bar=False, on_step=False, on_epoch=True, sync_dist=False)
+
+        # -- Clean up --------------------------------------------- #
+        if self.track_fid or self.track_spectral:
+            # Clear the list of reconstructed images
+            self._val_recons_img = []
 
         super().on_validation_epoch_end()
     

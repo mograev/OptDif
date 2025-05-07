@@ -65,7 +65,8 @@ class FIDScore:
         dataloader = torch.utils.data.DataLoader(
             data,
             batch_size=32,
-            num_workers=4
+            num_workers=4,
+            persistent_workers=True,
         )
 
         # Initialize an array to store the predictions, shaped (data_size, dims)
