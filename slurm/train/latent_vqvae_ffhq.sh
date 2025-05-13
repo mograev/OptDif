@@ -13,12 +13,17 @@ img_tensor_dir="data/ffhq/pt_images"
 attr_path="data/ffhq/ffhq_smile_scores.json"
 max_property_value=5
 min_property_value=0
-batch_size=128
+batch_size=32
 num_workers=8
 val_split=0.1
+data_device="cuda"
 
 # Weighter
 weight_type="uniform"
+
+# Clear interfering Python paths (when using JupyterHub)
+unset PYTHONPATH
+export PYTHONPATH=/pfs/work9/workspace/scratch/ma_mgraevin-optdif:$PYTHONPATH
 
 # Initialize Conda for the current shell
 eval "$(conda shell.bash hook)"
@@ -27,7 +32,7 @@ eval "$(conda shell.bash hook)"
 conda activate optdif1
 
 # Run the Python script with specified arguments (using srun for SLURM)
-srun python src/run/train_latent_vqvae_ffhq.py \
+python src/run/train_latent_vqvae_ffhq.py \
     --img_dir $img_dir \
     --img_tensor_dir $img_tensor_dir \
     --attr_path $attr_path \
@@ -37,5 +42,6 @@ srun python src/run/train_latent_vqvae_ffhq.py \
     --num_workers $num_workers \
     --val_split $val_split \
     --weight_type $weight_type \
+    --data_device $data_device \
     --aug
     "$@"

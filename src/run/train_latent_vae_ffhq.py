@@ -37,7 +37,7 @@ if __name__ == "__main__":
     args.seed=42
     args.max_epochs=100
     args.model_output_dir="models/latent_vae"
-    args.latent_vae_config_path="models/latent_vae/configs/sd35m_to_512d_lpips.yaml"
+    args.latent_vae_config_path="models/latent_vae/configs/sd35m_to_512d_lpips_disc.yaml"
 
     # Seed everything
     pl.seed_everything(args.seed)
@@ -85,11 +85,9 @@ if __name__ == "__main__":
     latent_vae = LatentVAE(
         ddconfig=latent_vae_config["ddconfig"],
         lossconfig=latent_vae_config["lossconfig"],
-        embed_dim=latent_vae_config["embed_dim"],
         learning_rate=latent_vae_config["learning_rate"],
         sd_vae_path="stabilityai/stable-diffusion-3.5-medium",
         ckpt_path=None,
-        monitor="val/total_loss",
         fid_instance=fid_instance,
         spectral_instance=spectral_instance,
     )
@@ -102,12 +100,18 @@ if __name__ == "__main__":
     # TensorBoard logger to log training progress
     tb_logger = pl.loggers.TensorBoardLogger(
         save_dir=args.model_output_dir,
-        version="version_15",
+        version="version_16",
         name="",
     )
 
-    # Model checkpoint callback to save the best model
-    checkpointer = pl.callbacks.ModelCheckpoint(save_last=True, monitor="val/total_loss")
+    # Model checkpoint callback to save model checkpoints
+    checkpointer = pl.callbacks.ModelCheckpoint(
+        filename="epoch_{epoch:03d}",
+        auto_insert_metric_name=False,
+        save_top_k=-1,
+        every_n_epochs=1,
+        save_last=True,
+    )
 
     # Enable PyTorch anomaly detection
     with torch.autograd.set_detect_anomaly(True):
@@ -119,10 +123,9 @@ if __name__ == "__main__":
             max_epochs=args.max_epochs,
             limit_train_batches=1.0,
             limit_val_batches=0.5,
-            #val_check_interval=200,
             logger=tb_logger,
             callbacks=[checkpointer],
-            enable_progress_bar=False
+            enable_progress_bar=True
         )
 
         # Fit model

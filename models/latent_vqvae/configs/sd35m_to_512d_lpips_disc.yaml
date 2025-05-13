@@ -1,5 +1,5 @@
 ddconfig:
-    double_z: true
+    double_z: false
     z_channels: 8
     resolution: 32
     in_channels: 16
@@ -9,21 +9,22 @@ ddconfig:
     num_res_blocks: 2
     attn_resolutions: [16]
     dropout: 0.0
-    attn_type: "vanilla"
-    embed_dim: 512
+    attn_type: "none"
+    n_embed: 1024
+    embed_dim: 8
 lossconfig:
-    target: "src.models.modules.losses.LPIPSWithDiscriminator"
+    target: "src.models.modules.losses.VQLPIPSWithDiscriminator"
     params:
-        disc_start: 20001
-        logvar_init: 0.0
+        disc_start: 20000
         rec_img_weight: 1.0
         rec_lat_weight: 1.0
         perceptual_weight: 1.0
-        kl_weight: 0.000001
+        codebook_weight: 0.25
         disc_weight: 0.5
         disc_num_layers: 3
-        disc_in_channels: 16
+        disc_in_channels: 3
         use_actnorm: false
-        disc_loss: "hinge_r1" # hinge or hinge_r1
-embed_dim: 512
-learning_rate: 4.5e-6
+        disc_loss: "hinge_r1"
+        pixel_loss: "l1"
+        n_embed: 1024
+learning_rate: 1.0e-4
