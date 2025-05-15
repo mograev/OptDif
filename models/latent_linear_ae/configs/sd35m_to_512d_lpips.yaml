@@ -1,0 +1,11 @@
+ddconfig:
+    input_dim: 16384
+    latent_dim: 512
+lossconfig:
+    target: "src.models.modules.losses.LPIPSMSELoss"
+    params:
+        lpips_weight: 1.0
+        rec_img_weight: 1.0
+        rec_lat_weight: 1.0
+        lpips_weight: 1.0
+learning_rate: 1.0e-4

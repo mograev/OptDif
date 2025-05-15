@@ -5,6 +5,9 @@ data/ffhq/pt_images/
 data/ffhq/sd_latents/
 data/ffhq/ffhq-dataset-v2.json
 
+# Demo
+demo/losses/
+
 # Models
 models/classifier/
 models/latent_vae/*
@@ -16,6 +19,9 @@ models/latent_autoencoder/*
 models/latent_vqvae/*
 !models/latent_vqvae/configs/
 !models/latent_vqvae/configs/**
+models/latent_linear_ae/*
+!models/latent_linear_ae/configs/
+!models/latent_linear_ae/configs/**
 taming/
 
 # Optimization results
