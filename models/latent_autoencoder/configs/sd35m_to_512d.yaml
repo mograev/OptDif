@@ -9,7 +9,8 @@ ddconfig:
     num_res_blocks: 2
     attn_resolutions: []
     dropout: 0.0
-    attn_type: "none"
+    attn_type: "vanilla"
+    embed_dim: 512
 lossconfig:
     target: "src.models.modules.losses.SimpleAutoencoderLoss"
-embed_dim: 512
+learning_rate: 4.5e-6

@@ -10,6 +10,7 @@ ddconfig:
     attn_resolutions: []
     dropout: 0.0
     attn_type: "none"
+    embed_dim: 128
 lossconfig:
     target: "src.models.modules.losses.VAEWithDiscriminator"
     params:
@@ -22,4 +23,4 @@ lossconfig:
         use_actnorm: false
         disc_conditional: false
         disc_loss: "hinge"
-embed_dim: 128
+learning_rate: 1.0e-4

@@ -21,6 +21,13 @@ data_device="cuda"
 # Weighter
 weight_type="uniform"
 
+# Model & Training
+model_type="LatentVAE"
+model_version=17
+model_config_path="models/latent_vae/configs/sd35m_to_512d_lpips_disc.yaml"
+model_output_dir="models/latent_vae/"
+max_epochs=100
+
 # Clear interfering Python paths (when using JupyterHub)
 unset PYTHONPATH
 export PYTHONPATH=/pfs/work9/workspace/scratch/ma_mgraevin-optdif:$PYTHONPATH
@@ -32,7 +39,7 @@ eval "$(conda shell.bash hook)"
 conda activate optdif1
 
 # Run the Python script with specified arguments (using srun for SLURM)
-python src/run/train_latent_vae_ffhq.py \
+python src/run/train_latent_model_ffhq.py \
     --img_dir $img_dir \
     --img_tensor_dir $img_tensor_dir \
     --attr_path $attr_path \
@@ -41,7 +48,12 @@ python src/run/train_latent_vae_ffhq.py \
     --batch_size $batch_size \
     --num_workers $num_workers \
     --val_split $val_split \
-    --weight_type $weight_type \
     --data_device $data_device \
-    --aug
+    --aug \
+    --weight_type $weight_type \
+    --model_type $model_type \
+    --model_version $model_version \
+    --model_config_path $model_config_path \
+    --model_output_dir $model_output_dir \
+    --max_epochs $max_epochs \
     "$@"

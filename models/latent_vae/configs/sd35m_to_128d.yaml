@@ -10,8 +10,9 @@ ddconfig:
     attn_resolutions: []
     dropout: 0.0
     attn_type: "none"
+    embed_dim: 128
 lossconfig:
     target: "src.models.modules.losses.SimpleVAELoss"
     params:
         beta: 0.001
-embed_dim: 128
+learning_rate: 1.0e-4

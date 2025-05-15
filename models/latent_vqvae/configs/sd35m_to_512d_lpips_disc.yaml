@@ -12,6 +12,8 @@ ddconfig:
     attn_type: "none"
     n_embed: 1024
     embed_dim: 8
+    remap: null
+    sane_index_shape: false
 lossconfig:
     target: "src.models.modules.losses.VQLPIPSWithDiscriminator"
     params:
