@@ -5,5 +5,7 @@ try:
     DNGO_TRAIN_FILE = str(Path(__path__[0]) / "bo/dngo_train.py")
     GP_TRAIN_FILE = str(Path(__path__[0]) / "bo/gp_train.py")
     OPT_FILE = str(Path(__path__[0]) / "bo/opt.py")
+    GBO_TRAIN_FILE = str(Path(__path__[0]) / "gbo/gbo_train.py")
+    GBO_OPT_FILE = str(Path(__path__[0]) / "gbo/gbo_opt.py")
 except:
     pass

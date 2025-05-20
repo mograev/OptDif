@@ -41,9 +41,9 @@ class LitVAE(pl.LightningModule):
 
         # Log losses
         self.log_dict({
-            "train_total_loss": loss,
-            "train_recon_loss": recon_loss,
-            "train_kl_loss": kl_loss
+            "train/total_loss": loss,
+            "train/recon_loss": recon_loss,
+            "train/kl_loss": kl_loss
         })
 
         return loss
@@ -69,9 +69,9 @@ class LitVAE(pl.LightningModule):
 
         # Log losses
         self.log_dict({
-            "val_total_loss": loss,
-            "val_recon_loss": recon_loss,
-            "val_kl_loss": kl_loss
+            "val/total_loss": loss,
+            "val/recon_loss": recon_loss,
+            "val/kl_loss": kl_loss
         }, prog_bar=True)
 
         return loss
