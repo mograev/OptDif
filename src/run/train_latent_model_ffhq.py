@@ -133,7 +133,7 @@ if __name__ == "__main__":
             limit_val_batches=0.5,
             logger=tb_logger,
             callbacks=[checkpointer],
-            enable_progress_bar=True,
+            enable_progress_bar=False,
         )
 
         # Fit model

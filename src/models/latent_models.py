@@ -233,8 +233,6 @@ class LatentModel(pl.LightningModule, ABC):
             gathered = [None] * dist.get_world_size()
             dist.all_gather_object(gathered, recon_img)
             recon_img = torch.cat(gathered, dim=0)
-        
-        print("recon_img.device", recon_img.device, recon_img.dtype, recon_img.shape)
 
         # -- FID & Spectral score --------------------------------- #
         if self.global_rank == 0:

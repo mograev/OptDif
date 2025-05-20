@@ -24,7 +24,7 @@ weight_type="uniform"
 # Model & Training
 model_type="LatentVAE"
 model_version=17
-model_config_path="models/latent_vae/configs/sd35m_to_512d_lpips_disc.yaml"
+model_config_path="models/latent_vae/configs/sd35m_to_512d_lpips_disc_v2.yaml"
 model_output_dir="models/latent_vae/"
 max_epochs=100
 
