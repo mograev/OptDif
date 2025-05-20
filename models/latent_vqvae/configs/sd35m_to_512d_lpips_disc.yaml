@@ -9,7 +9,7 @@ ddconfig:
     num_res_blocks: 2
     attn_resolutions: [16]
     dropout: 0.0
-    attn_type: "none"
+    attn_type: "vanilla"
     n_embed: 1024
     embed_dim: 8
     remap: null
