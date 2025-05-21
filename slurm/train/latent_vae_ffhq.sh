@@ -23,10 +23,12 @@ weight_type="uniform"
 
 # Model & Training
 model_type="LatentVAE"
-model_version=17
-model_config_path="models/latent_vae/configs/sd35m_to_512d_lpips_disc_v2.yaml"
+model_version=18
+model_config_path="models/latent_vae/configs/sd35m_to_8k_lpips_disc.yaml"
 model_output_dir="models/latent_vae/"
 max_epochs=100
+device="cuda"
+num_devices=4
 
 # Clear interfering Python paths (when using JupyterHub)
 unset PYTHONPATH
@@ -56,4 +58,6 @@ python src/run/train_latent_model_ffhq.py \
     --model_config_path $model_config_path \
     --model_output_dir $model_output_dir \
     --max_epochs $max_epochs \
+    --device $device \
+    --num_devices $num_devices \
     "$@"

@@ -38,6 +38,8 @@ if __name__ == "__main__":
     parser.add_argument("--model_config_path", type=str, help="Path to the model config file")
     parser.add_argument("--model_output_dir", type=str, help="Directory to save the model")
     parser.add_argument("--max_epochs", type=int, default=100, help="Maximum number of epochs to train the model")
+    parser.add_argument("--device", type=str, default="cuda", help="Device to use for training (e.g., 'cuda' or 'cpu')")
+    parser.add_argument("--num_devices", type=int, default=4, help="Number of devices to use for training")
     args = parser.parse_args()
 
     # Seed everything
@@ -56,8 +58,8 @@ if __name__ == "__main__":
     # -- Initialize FID and Spectral metric ----------------------- #
 
     # Initialize instances
-    fid_instance = FIDScore(img_size=256, device="cuda")
-    spectral_instance = SpectralScore(img_size=256, device="cuda")
+    fid_instance = FIDScore(img_size=256, device=args.device)
+    spectral_instance = SpectralScore(img_size=256, device=args.device)
 
     # Load validation dataset (workaround)
     val_filename_list = datamodule.val_dataloader().dataset.filename_list
@@ -126,8 +128,8 @@ if __name__ == "__main__":
         # Create trainer
         trainer = pl.Trainer(
             accelerator="gpu",
-            devices=4,
-            strategy="ddp_find_unused_parameters_true", # required
+            devices=args.num_devices if args.device == "cuda" else 1,
+            strategy="ddp_find_unused_parameters_true" if args.device == "cuda" else None,
             max_epochs=args.max_epochs,
             limit_train_batches=1.0,
             limit_val_batches=0.5,
