@@ -17,7 +17,7 @@ img_tensor_dir="data/ffhq/pt_images"
 attr_path="data/ffhq/ffhq_smile_scores.json"
 max_property_value=1 #5
 min_property_value=0 #0
-batch_size=128 #128
+batch_size=32 #128
 num_workers=4 #4
 val_split=0.
 data_device="cuda"
@@ -29,8 +29,8 @@ weight_type="uniform"
 query_budget=500
 retraining_frequency=5
 n_retrain_epochs=0.1
-n_init_retrain_epochs=0 #1
-result_path="results/debug_08/"
+n_init_retrain_epochs=0.1 #1
+result_path="results/debug_10/"
 sd_vae_path="stable-diffusion-v1-5/stable-diffusion-v1-5" #"stabilityai/stable-diffusion-3.5-medium"
 predictor_attr_file="models/classifier/celeba_smile/attributes.json"
 predictor_path="models/classifier/celeba_smile/predictor_128_scaled3.pth.tar"
@@ -38,8 +38,8 @@ scaled_predictor=True
 
 # Optimization
 opt_strategy="GBO" # "GBO", "GP", "DNGO"
-n_out=3
-n_starts=5 #20
+n_out=5
+n_starts=10 #20
 n_rand_points=800  #8000
 n_best_points=200 #2000
 

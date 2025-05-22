@@ -12,14 +12,19 @@ from scipy.stats import multivariate_normal
 
 
 def zero_mean_unit_var_normalization(X, mean=None, std=None):
-    if mean is None:
+
+    compute_mean_std = mean is None and std is None
+
+    if compute_mean_std:
         mean = np.mean(X, axis=0)
-    if std is None:
         std = np.std(X, axis=0)
 
     X_normalized = (X - mean) / std
 
-    return X_normalized, mean, std
+    if compute_mean_std:
+        return X_normalized, mean, std
+    else:
+        return X_normalized
 
 
 def zero_mean_unit_var_denormalization(X_normalized, mean, std):

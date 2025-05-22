@@ -216,8 +216,8 @@ def _decode_and_predict(sd_vae, predictor, z, device):
             # Move latent vectors to the correct device
             latents = z[j: j + batch_size].to(device)
 
-            # Reshape latents to match the VAE's expected input shape (B, C, H, W)
-            latents = latents.view(latents.shape[0], 4, 32, 32)
+            # Reshape latents to match the VAE's expected input shape (B, C', H', W')
+            latents = latents.view(latents.shape[0], *sd_vae.latent_shape)
 
             # Decode SD latents to images
             decoded_images = sd_vae.decode(latents).sample
@@ -485,6 +485,12 @@ def main_loop(args):
         sd_vae.eval()
     else:
         raise NotImplementedError(args.sd_vae_path)
+    
+    # Obtain shape of the latent space
+    with torch.no_grad():
+        dummy = torch.zeros(1, 3, 256, 256)
+        latent_shape = sd_vae.encode(dummy).latent_dist.sample().shape[1:]  # (C', H', W')
+    sd_vae.latent_shape = latent_shape
 
     # Load pretrained (temperature-scaled) predictor
     predictor = SmileClassifier(

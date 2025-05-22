@@ -87,7 +87,6 @@ def opt_gbo(
     # Run optimization
     logger.info("\n### STARTING OPTIMIZATION ###\n")
     start_time = time.time()
-    archive = []
     list_z = []
     list_y = []
 
@@ -97,43 +96,60 @@ def opt_gbo(
         logger.info(f"z={z.cpu().numpy()}")
         z.requires_grad = True
 
-        # Define the optimizer
+        # Optimizer setup
         optimizer = torch.optim.Adam([z], lr=1e-3)
-
-        # Early stopping
-        patience = 50
-        tol = 1e-4
-        best_loss = float('inf')
-        no_improve = 0
-
         n_steps = 1000
+
+        # Adaptive ALM setup
+        R = z.shape[1] ** 0.5
+        lam = torch.zeros(1, device=device)
+        mu = torch.tensor(10.0, device=device)
+        eta1, eta2 = 0.25, 0.75
+        beta_down, beta_up = 0.5, 2.0
+        prev_violation = float('inf')  # keep as plain Python scalar
+        mu_min, mu_max = 1e-3, 1e6
+        k_update  = 10 # only touch μ every k steps
+
         for step in range(n_steps):
             optimizer.zero_grad()
             score = model(z)
-            penalty_norm = 0.01 * torch.norm(z) # ** 2
-            penalty_div = diversity_penalty(z, archive, lam=3)
 
-            if step % 100 == 0:
-                logger.debug(f"Score={score.item():.4f}, Norm={penalty_norm.item():.4f}, Div={penalty_div.item():.4f}")
+            # Compute constraint and loss at current z
+            g_norm = torch.norm(z) - R           # signed constraint value
+            g_plus = torch.clamp(g_norm, min=0.) # violation (≥ 0)
 
-            # Loss function
-            loss = -score + penalty_norm + penalty_div
-
-            # Early stopping check
-            if loss < best_loss - tol:
-                best_loss = loss
-                no_improve = 0
-            else:
-                no_improve += 1
-            if no_improve >= patience:
-                break
-
-            loss.backward()
+            # Augmented Lagrangian
+            aug_lag = -score + lam * g_plus + 0.5 * mu * g_plus ** 2
+            aug_lag.backward()
             optimizer.step()
 
-        # Add to archive
-        with torch.no_grad():
-            archive.append(z.clone().detach())
+            # Logging
+            if step % 100 == 0:
+                logger.debug(f"Score={score.item():.4f}, g_norm={g_norm.item():.4f}, " +
+                             f"aug_lag={aug_lag.item():.4f}, " +
+                             f"lam={lam.item():.4f}, " +
+                             f"mu={mu.item():.4f}")
+
+            # Dual & penalty update
+            with torch.no_grad():
+                # Current signed constraint and its violation
+                g_norm = torch.norm(z) - R
+                g_plus = torch.clamp(g_norm, min=0.)
+                violation = g_plus.item()  # scalar ≥ 0
+
+                # Dual update (λ := λ + μ·g⁺, stays ≥ 0 automatically)
+                lam = lam + mu * g_plus
+
+                # Penalty update (only every k steps)
+                if step % k_update == 0:
+                    if violation < eta1 * prev_violation:
+                        # Constraint improving fast – shrink μ but keep it ≥ mu_min
+                        mu = torch.clamp(mu * beta_down, min=mu_min)
+                    elif violation > eta2 * prev_violation:
+                        # Constraint stagnating – grow μ but cap it at mu_max
+                        mu = torch.clamp(mu * beta_up, max=mu_max)
+
+                    prev_violation = violation
 
         # Get function value
         with torch.no_grad():
