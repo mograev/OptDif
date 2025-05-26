@@ -25,9 +25,9 @@ from src.dataloader.ffhq import FFHQWeightedDataset
 from src.dataloader.utils import SimpleFilenameToTensorDataset
 from src.dataloader.weighting import DataWeighter
 from src.classification.smile_classifier import SmileClassifier
-from src.models.latent_models import LatentVQVAE
+from src.models.latent_models import LatentVAE, LatentVQVAE
 from src.utils import SubmissivePlProgressbar
-from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, OPT_FILE
+from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE, ENTMOOT_TRAIN_OPT_FILE
 
 
 # Weighted Retraining arguments
@@ -51,20 +51,23 @@ def add_wr_args(parser):
 
     return parser
 
-# BO arguments
-def add_bo_args(parser):
-    """ Add arguments for bayesian optimization """
+# Optimization arguments
+def add_opt_args(parser):
+    """ Add arguments for training and optimization of surrogate model. """
+
+    # Common arguments
+    opt_group = parser.add_argument_group("Optimization")
+    opt_group.add_argument("--opt_strategy", type=str, choices=["GBO", "DNGO", "GP", "ENTMOOT"], help="Optimization strategy to use")
+    opt_group.add_argument("--n_out", type=int, default=5, help="Number of points to return from optimization")
+    opt_group.add_argument("--n_starts", type=int, default=20, help="Number of optimization runs with different initial values")
+    opt_group.add_argument("--n_rand_points", type=int, default=8000, help="Number of random points to sample for surrogate model training")
+    opt_group.add_argument("--n_best_points", type=int, default=2000, help="Number of best points to sample for surrogate model training")
 
     # BO arguments (used for both DNGO and GP)
     bo_group = parser.add_argument_group("BO")
-    bo_group.add_argument("--bo_surrogate", type=str, default="GP", help="Surrogate model to use for BO: 'GP' or 'DNGO'")
-    bo_group.add_argument("--n_out", type=int, default=5, help="Number of points to return from optimization")
-    bo_group.add_argument("--n_starts", type=int, default=20, help="Number of optimization runs with different initial values")
-    bo_group.add_argument("--n_rand_points", type=int, default=8000, help="Number of random points to sample for surrogate model training")
-    bo_group.add_argument("--n_best_points", type=int, default=2000, help="Number of best points to sample for surrogate model training")
-    bo_group.add_argument("--sample_distribution", type=str, default="normal", help="Distribution to sample from: 'normal' or 'uniform'")
     bo_group.add_argument("--n_samples", type=int, default=10000, help="Number of samples to draw from sample distribution")
-    bo_group.add_argument("--opt_method", type=str, default="SLSQP", help="Optimization method to use: 'SLSQP', 'COBYLA' 'L-BFGS-B'")
+    bo_group.add_argument("--sample_distribution", type=str, default="normal", help="Distribution to sample from: 'normal' or 'uniform'")
+    bo_group.add_argument("--opt_method", type=str, default="SLSQP", choices=["SLSQP", "COBYLA", "L-BFGS-B"], help="Optimization method to use: 'SLSQP', 'COBYLA' 'L-BFGS-B'")
     bo_group.add_argument("--opt_constraint_threshold", type=float, default=None, help="Log-density threshold for optimization constraint")
     bo_group.add_argument("--opt_constraint_strategy", type=str, default="gmm_fit", help="Strategy for optimization constraint: only 'gmm_fit' is implemented")
     bo_group.add_argument("--n_gmm_components", type=int, default=None, help="Number of components used for GMM fitting")
@@ -76,7 +79,7 @@ def add_bo_args(parser):
     return parser
 
 # Setup logging
-logger = logging.getLogger("lso-ffhq-bo")
+logger = logging.getLogger("lso-ffhq")
 
 def setup_logger(logfile):
     stream_handler = logging.StreamHandler(stream=sys.stdout)
@@ -112,7 +115,7 @@ def _retrain_latent_model(latent_model, datamodule, save_dir, version_str, num_e
     tb_logger = pl.loggers.TensorBoardLogger(
         save_dir=save_dir, version=version_str, name=""
     )
-    checkpointer = pl.callbacks.ModelCheckpoint(save_last=True, monitor="val_total_loss")
+    checkpointer = pl.callbacks.ModelCheckpoint(save_last=True, monitor="val/total_loss")
 
     # Handle fractional epochs
     if num_epochs < 1:
@@ -200,11 +203,17 @@ def _encode_latents(latent_model, dataloader, device):
 
     with torch.no_grad():
         for sd_tensor_batch in dataloader:
-            # Move images to the correct device
+            # Move sd latents to the correct device
             sd_latents = sd_tensor_batch.to(device)
             
-            # Encode images into latent space
-            latents = latent_model.encode(sd_latents)[0]
+            # Encode sd latents into lower dim latent space
+            if isinstance(latent_model, LatentVAE):
+                # For LatentVAE, sample from the latent distribution
+                latents = latent_model.encode(sd_latents).sample()
+            elif isinstance(latent_model, LatentVQVAE):
+                # For LatentVQVAE, get the indices of the quantized latents
+                latents = latent_model.encode(sd_latents)[2]
+
             zz_encode.append(latents.cpu().numpy())
 
     # Free up GPU memory
@@ -264,12 +273,11 @@ def _decode_and_predict(latent_model, sd_vae, predictor, z, device):
     return decoded_images.cpu(), predictions, sd_latents
 
 
-def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_queries_to_do, bo_data_file, bo_run_folder, device="cpu", pbar=None, postfix=None):
+def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_queries_to_do, data_file, run_folder, device="cpu", pbar=None, postfix=None):
     """ Perform latent space optimization using traditional local optimization strategies """
 
-    ##################################################
-    # Prepare BO
-    ##################################################
+    # -- Prepare Optimization ------------------------------------- #
+    logger.debug("Preparing Optimization")
 
     # First, choose BO points to train!
     chosen_indices = _choose_best_rand_points(args, datamodule)
@@ -290,109 +298,179 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
 
     # Encode the data to the lower-dimensional latent space
     latent_points = _encode_latents(latent_model, temp_dataloader, args.device)
-    logger.debug(latent_points.shape)
+    logger.debug(f"Latent points shape: {latent_points.shape}")
 
     # Save points to file
-    targets = -targets.reshape(-1, 1)  # Since it is a minimization problem
+    if args.opt_strategy in ["GP", "DNGO", "ENTMOOT"]:
+        targets = -targets.reshape(-1, 1)  # Since it is a minimization problem
+    elif args.opt_strategy == "GBO":
+        targets = targets.reshape(-1, 1)
 
     # Save the file
     np.savez_compressed(
-        bo_data_file,
+        data_file,
         X_train=latent_points.astype(np.float64),
         X_test=[],
         y_train=targets.astype(np.float64),
         y_test=[],
     )
 
-    # Part 1: fit surrogate model
-    # ===============================
+    # Save old progress bar description
+    if pbar is not None:
+        old_desc = pbar.desc
+
     iter_seed = int(np.random.randint(10000))
 
-    new_bo_file = bo_run_folder / f"bo_train_res.npz"
-    log_path = bo_run_folder / f"bo_train.log"
+    # -- Optimization based on strategy --------------------------- #
 
-    if args.bo_surrogate == "GP":
-        gp_train_command = [
+    if args.opt_strategy in ["GP", "DNGO"]:
+
+        # -- 1. Fit surrogate model ------------------------------- #
+
+        new_bo_file = run_folder / f"bo_train_res.npz"
+        log_path = run_folder / f"bo_train.log"
+
+        if args.opt_strategy == "GP":
+
+            gp_train_command = [
+                "python",
+                GP_TRAIN_FILE,
+                f"--nZ={args.n_inducing_points}",
+                f"--seed={iter_seed}",
+                f"--data_file={str(data_file)}",
+                f"--save_file={str(new_bo_file)}",
+                f"--logfile={str(log_path)}",
+                f"--device={args.device}",
+                "--kmeans_init",
+            ]
+
+            if pbar is not None:
+                pbar.set_description("GP initial fit")
+
+            _run_command(gp_train_command, f"GP train")
+
+        elif args.opt_strategy == "DNGO":
+
+            dngo_train_command = [
+                "python",
+                DNGO_TRAIN_FILE,
+                f"--seed={iter_seed}",
+                f"--data_file={str(data_file)}",
+                f"--save_file={str(new_bo_file)}",
+                f"--logfile={str(log_path)}",
+            ]
+
+            if pbar is not None:
+                pbar.set_description("DNGO initial fit")
+
+            _run_command(dngo_train_command, f"DNGO train")
+
+        curr_bo_file = new_bo_file
+
+        # -- 2. Optimize surrogate acquisition function ----------- #
+        
+        opt_path = run_folder / f"bo_opt_res.npy"
+        log_path = run_folder / f"bo_opt.log"
+
+        dngo_opt_command = [
             "python",
-            GP_TRAIN_FILE,
-            f"--nZ={args.n_inducing_points}",
+            BO_OPT_FILE,
             f"--seed={iter_seed}",
-            f"--data_file={str(bo_data_file)}",
-            f"--save_file={str(new_bo_file)}",
+            f"--surrogate_type={args.bo_surrogate}",
+            f"--surrogate_file={str(curr_bo_file)}",
+            f"--data_file={str(data_file)}",
+            f"--save_file={str(opt_path)}",
+            f"--logfile={str(log_path)}",
+            f"--sample_distribution={str(args.sample_distribution)}",
+            f"--n_out={str(num_queries_to_do)}",
+            f"--n_starts={args.n_starts}",
+            f"--n_samples={str(args.n_samples)}",
+            f"--opt_method={args.opt_method}",
+            f"--sparse_out={args.sparse_out}"
+        ]
+
+        if args.opt_constraint_threshold is not None:
+            dngo_opt_command.append(f"--opt_constraint_threshold={args.opt_constraint_threshold}")
+            dngo_opt_command.append(f"--opt_constraint_strategy={args.opt_constraint_strategy}")
+            dngo_opt_command.append(f"--n_gmm_components={args.n_gmm_components}")
+
+        if pbar is not None:
+            pbar.set_description("optimizing acq func")
+        _run_command(dngo_opt_command, f"Surrogate opt")
+
+    elif args.opt_strategy == "GBO":
+
+        # -- 1. Fit surrogate model ------------------------------- #
+
+        new_gbo_file = run_folder / f"gbo_train_res.npz"
+        log_path = run_folder / f"gbo_train.log"
+
+        gbo_train_command = [
+            "python",
+            GBO_TRAIN_FILE,
+            f"--seed={iter_seed}",
+            f"--data_file={str(data_file)}",
+            f"--save_file={str(new_gbo_file)}",
             f"--logfile={str(log_path)}",
             f"--device={args.device}",
-            "--kmeans_init",
+            "--normalize_input",
         ]
 
-        # Add commands for initial fitting
-        gp_fit_desc = "GP initial fit"
-
-        # Set pbar status for user
         if pbar is not None:
-            old_desc = pbar.desc
-            pbar.set_description(gp_fit_desc)
+            pbar.set_description("GBO initial fit")
 
-        # Run command
-        _run_command(gp_train_command, f"GP train")
+        _run_command(gbo_train_command, f"GBO train")
 
-    elif args.bo_surrogate == "DNGO":
-    
-        dngo_train_command = [
+        curr_gbo_file = new_gbo_file
+
+        # -- 2. Optimize surrogate acquisition function ----------- #
+
+        opt_path = run_folder / f"gbo_opt_res.npy"
+        log_path = run_folder / f"gbo_opt.log"
+
+        gbo_opt_command = [
             "python",
-            DNGO_TRAIN_FILE,
+            GBO_OPT_FILE,
             f"--seed={iter_seed}",
-            f"--data_file={str(bo_data_file)}",
-            f"--save_file={str(new_bo_file)}",
+            f"--model_file={str(curr_gbo_file)}",
+            f"--save_file={str(opt_path)}",
             f"--logfile={str(log_path)}",
+            f"--n_starts={args.n_starts}",
+            f"--n_out={str(num_queries_to_do)}",
         ]
 
-        # Add commands for initial fitting
-        dngo_fit_desc = "DNGO initial fit"
-
-        # Set pbar status for user
         if pbar is not None:
-            old_desc = pbar.desc
-            pbar.set_description(dngo_fit_desc)
+            pbar.set_description("gradient-based optimization")
 
-        # Run command
-        _run_command(dngo_train_command, f"DNGO train")
+        _run_command(gbo_opt_command, f"GBO opt")
 
-    # Update surrogate file
-    curr_bo_file = new_bo_file
+    elif args.opt_strategy == "ENTMOOT":
 
-    # Part 2: optimize surrogate acquisition func to query point
-    # ===============================
-    
-    # Define paths
-    opt_path = bo_run_folder / f"bo_opt_res.npy"
-    log_path = bo_run_folder / f"bo_opt.log"
+        # Fitting and optimizing surrogate model (in one script)
+       new_entmoot_file = run_folder / f"entmoot_opt_res.npy"
+       log_path = run_folder / f"entmoot_train_opt.log"
+       opt_path = run_folder / f"entmoot_opt_res.npy"
 
-    # Define command
-    dngo_opt_command = [
-        "python",
-        OPT_FILE,
-        f"--seed={iter_seed}",
-        f"--surrogate_type={args.bo_surrogate}",
-        f"--surrogate_file={str(curr_bo_file)}",
-        f"--data_file={str(bo_data_file)}",
-        f"--save_file={str(opt_path)}",
-        f"--logfile={str(log_path)}",
-        f"--sample_distribution={str(args.sample_distribution)}",
-        f"--n_out={str(num_queries_to_do)}",
-        f"--n_starts={args.n_starts}",
-        f"--n_samples={str(args.n_samples)}",
-        f"--opt_method={args.opt_method}",
-        f"--sparse_out={args.sparse_out}"
-    ]
+       entmoot_train_opt_command = [
+            "python",
+            ENTMOOT_TRAIN_OPT_FILE,
+            f"--seed={iter_seed}",
+            f"--data_file={str(data_file)}",
+            f"--save_file={str(new_entmoot_file)}",
+            f"--predictor_path={str(args.predictor_path)}",
+            f"--scaled_predictor={str(args.scaled_predictor)}",
+            f"--predictor_attr_file={str(args.predictor_attr_file)}",
+            f"--n_starts={str(args.n_starts)}",
+            f"--n_out={str(num_queries_to_do)}",
+            f"--n_dim={str(latent_model.hparams.ddconfig['embed_dim'])}",
+            f"--n_embed={str(latent_model.hparams.ddconfig['n_embed'])}",
+            f"--logfile={str(log_path)}",
+       ]
 
-    if args.opt_constraint_threshold is not None:
-        dngo_opt_command.append(f"--opt_constraint_threshold={args.opt_constraint_threshold}")
-        dngo_opt_command.append(f"--opt_constraint_strategy={args.opt_constraint_strategy}")
-        dngo_opt_command.append(f"--n_gmm_components={args.n_gmm_components}")
+       if pbar is not None:
+           pbar.set_description("ENTMOOT training and optimization")
 
-    if pbar is not None:
-        pbar.set_description("optimizing acq func")
-    _run_command(dngo_opt_command, f"Surrogate opt")
+       _run_command(entmoot_train_opt_command, f"ENTMOOT train and opt")
 
     # Load point
     z_opt = np.load(opt_path)
@@ -433,7 +511,7 @@ def main_loop(args):
     data_dir.mkdir()
     sd_latent_dir = data_dir / "sd_latents"
     sd_latent_dir.mkdir()
-    # sd_latent_dir = "/pfs/work9/workspace/scratch/ma_mgraevin-optdif/results/temp_latents/"
+    sd_latent_dir = "/pfs/work9/workspace/scratch/ma_mgraevin-optdif/results/temp_latents/"
     samples_dir = data_dir / "samples"
     samples_dir.mkdir()
 
@@ -462,11 +540,7 @@ def main_loop(args):
     latent_model = LatentVQVAE(
         ddconfig=latent_model_config["ddconfig"],
         lossconfig=latent_model_config["lossconfig"],
-        n_embed=latent_model_config["embedconfig"]["n_embed"],
-        embed_dim=latent_model_config["embedconfig"]["embed_dim"],
         ckpt_path=args.latent_model_ckpt_path,
-        ignore_keys=["model_ema"],
-        monitor="val_total_loss",
     )
 
     # Load pretrained (temperature-scaled) predictor
@@ -498,16 +572,16 @@ def main_loop(args):
     with open(result_dir / "retraining_hparams.yaml", "w") as f:
         yaml.dump(args.__dict__, f, default_flow_style=False)
 
-    # Encode images into SD-VAE latent space
-    sd_latents = _encode_images(
-        sd_vae,
-        datamodule.set_mode("img_tensor").train_dataloader(),
-        args.device
-    )
+    # # Encode images into SD-VAE latent space
+    # sd_latents = _encode_images(
+    #     sd_vae,
+    #     datamodule.set_mode("img").train_dataloader(),
+    #     args.device
+    # )
 
-    # Save the encoded images as tensors
-    for filename, sd_latent in zip(datamodule.train_dataset.filename_list, sd_latents):
-        torch.save(sd_latent, sd_latent_dir / f"{filename}.pt", pickle_protocol=pickle.HIGHEST_PROTOCOL)
+    # # Save the encoded images as tensors
+    # for filename, sd_latent in zip(datamodule.train_dataset.filename_list, sd_latents):
+    #     torch.save(sd_latent, sd_latent_dir / f"{filename}.pt", pickle_protocol=pickle.HIGHEST_PROTOCOL)
 
     # Add SD latents to datamodule
     datamodule.add_mode("sd_latent", sd_latent_dir)
@@ -548,10 +622,10 @@ def main_loop(args):
                 args.retraining_frequency, args.query_budget - samples_so_far
             )
 
-            # Create a new directory for the BO run
-            bo_dir = result_dir / "bo" / f"iter_{samples_so_far}"
-            bo_dir.mkdir(parents=True)
-            bo_data_file = bo_dir / "data.npz"
+            # Create a new directory for the optimization run
+            opt_dir = result_dir / "opt" / f"iter_{samples_so_far}"
+            opt_dir.mkdir(parents=True)
+            opt_data_file = opt_dir / "data.npz"
 
             # Perform latent optimization
             x_new, y_new, z_query, sd_query = latent_optimization(
@@ -561,8 +635,8 @@ def main_loop(args):
                 predictor,
                 datamodule,
                 num_queries_to_do,
-                bo_data_file=bo_data_file,
-                bo_run_folder=bo_dir,
+                data_file=opt_data_file,
+                run_folder=opt_dir,
                 device=args.device,
                 pbar=pbar,
                 postfix=postfix,
@@ -620,7 +694,7 @@ if __name__ == "__main__":
     # arguments and argument checking
     parser = argparse.ArgumentParser()
     parser = add_wr_args(parser)
-    parser = add_bo_args(parser)
+    parser = add_opt_args(parser)
     parser = FFHQWeightedDataset.add_data_args(parser)
     parser = DataWeighter.add_weight_args(parser)
     

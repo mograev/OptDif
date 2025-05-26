@@ -125,10 +125,7 @@ class MultiModeDataset(Dataset):
             if self.mode == 'img':
                 path = os.path.join(mode_dir, f"{name_without_ext}.png")
                 file = Image.open(path).convert("RGB")
-            elif self.mode == 'img_tensor':
-                path = os.path.join(mode_dir, f"{name_without_ext}.pt")
-                file = torch.load(path, weights_only=False)
-            elif self.mode == 'sd_latent':
+            elif self.mode == 'img_tensor' or self.mode == 'sd_latent':
                 try:
                     path = os.path.join(mode_dir, f"{name_without_ext}.pt")
                     file = torch.load(path, weights_only=False)
@@ -141,7 +138,7 @@ class MultiModeDataset(Dataset):
                 file = torch.load(path, weights_only=False)
 
             # Potentially apply transformations and encoding to images
-            if self.mode == 'img': # or self.mode == 'img_tensor':
+            if self.mode == 'img' or self.mode == 'img_tensor':
                 if self.transform:
                     file = self.transform(file)
                 if self.do_encode:
@@ -153,7 +150,7 @@ class MultiModeDataset(Dataset):
             return file
             
         except Exception as e:
-            raise RuntimeError(f"Failed to load tensor for {filename} in mode {self.mode} from path {path}: {str(e)}")
+            raise RuntimeError(f"Failed to load {filename} in mode {self.mode} from path {path}: {str(e)}")
 
     def __len__(self):
         """Returns the length of the dataset"""

@@ -27,7 +27,7 @@ from src.dataloader.weighting import DataWeighter
 from src.classification.smile_classifier import SmileClassifier
 from src.models.lit_vae import LitVAE
 from src.utils import SubmissivePlProgressbar
-from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE
+from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE, ENTMOOT_TRAIN_OPT_FILE
 
 
 # Weighted Retraining arguments
@@ -51,30 +51,33 @@ def add_wr_args(parser):
 
 # Optimization arguments
 def add_opt_args(parser):
-    """ Add arguments for training and optimization."""
+    """ Add arguments for training and optimization of surrogate model."""
 
     # Common arguments
     opt_group = parser.add_argument_group("Optimization")
     opt_group.add_argument("--opt_strategy", type=str, choices=["GBO", "DNGO", "GP"], help="Optimization strategy to use")
-    opt_group.add_argument("--n_out", type=int, default=5)
+    opt_group.add_argument("--n_out", type=int, default=5, help="Number of points to return from optimization")
     opt_group.add_argument("--n_starts", type=int, default=20, help="Number of optimization runs with different initial values")
-    opt_group.add_argument("--n_rand_points", type=int, default=8000)
-    opt_group.add_argument("--n_best_points", type=int, default=2000)
+    opt_group.add_argument("--n_rand_points", type=int, default=8000, help="Number of random points to sample for surrogate model training")
+    opt_group.add_argument("--n_best_points", type=int, default=2000, help="Number of best points to sample for surrogate model training")
 
-    # BO arguments
-    bo_group = parser.add_argument_group("Bayesian Optimization")
-    bo_group.add_argument("--n_samples", type=int, default=10000)
-    bo_group.add_argument("--sample_distribution", type=str, default="normal")
-    bo_group.add_argument("--opt_method", type=str, default="SLSQP")
-    bo_group.add_argument("--opt_constraint_threshold", type=float, default=None, help="Threshold for optimization constraint")
-    bo_group.add_argument("--opt_constraint_strategy", type=str, default="gmm_fit")
+    # BO arguments (used for both DNGO and GP)
+    bo_group = parser.add_argument_group("BO")
+    bo_group.add_argument("--n_samples", type=int, default=10000, help="Number of samples to draw from sample distribution")
+    bo_group.add_argument("--sample_distribution", type=str, default="normal", help="Distribution to sample from: 'normal' or 'uniform'")
+    bo_group.add_argument("--opt_method", type=str, default="SLSQP", choices=["SLSQP", "COBYLA", "L-BFGS-B"], help="Optimization method to use: 'SLSQP', 'COBYLA' 'L-BFGS-B'")
+    bo_group.add_argument("--opt_constraint_threshold", type=float, default=None, help="Log-density threshold for optimization constraint")
+    bo_group.add_argument("--opt_constraint_strategy", type=str, default="gmm_fit", help="Strategy for optimization constraint: only 'gmm_fit' is implemented")
     bo_group.add_argument("--n_gmm_components", type=int, default=None, help="Number of components used for GMM fitting")
-    bo_group.add_argument("--sparse_out", type=bool, default=True)
+    bo_group.add_argument("--sparse_out", type=bool, default=True, help="Whether to filter out duplicate outputs")
+
+    # GP arguments
+    bo_group.add_argument("--n_inducing_points", type=int, default=500, help="Number of inducing points to use for GP (if initializing)")
 
     return parser
 
 # Setup logging
-logger = logging.getLogger("lso")
+logger = logging.getLogger("lso-ffhq-sd")
 
 def setup_logger(logfile):
     stream_handler = logging.StreamHandler(stream=sys.stdout)
@@ -246,10 +249,7 @@ def _decode_and_predict(sd_vae, predictor, z, device):
 def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, data_file, run_folder, device="cpu", pbar=None, postfix=None):
     """ Perform latent space optimization using traditional local optimization strategies """
 
-    ##################################################
-    # Prepare Optimization
-    ##################################################
-
+    # -- Prepare Optimization ------------------------------------- #
     logger.debug("Preparing Optimization")
 
     # First, choose points to train!
@@ -292,103 +292,64 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
     if pbar is not None:
         old_desc = pbar.desc
 
-    # Part 1: fit surrogate model
-    # ===============================
     iter_seed = int(np.random.randint(10000))
 
-    if args.opt_strategy == "GP":
+    # -- Optimization based on strategy --------------------------- #
 
-        new_bo_file = run_folder / f"bo_train_res.npz"
-        log_path = run_folder / f"bo_train.log"
-
-        gp_train_command = [
-            "python",
-            GP_TRAIN_FILE,
-            f"--nZ={args.n_inducing_points}",
-            f"--seed={iter_seed}",
-            f"--data_file={str(data_file)}",
-            f"--save_file={str(new_bo_file)}",
-            f"--logfile={str(log_path)}",
-            f"--device={args.device}",
-            "--kmeans_init",
-        ]
-
-        # Add commands for initial fitting
-        gp_fit_desc = "GP initial fit"
-
-        # Set pbar status for user
-        if pbar is not None:
-            old_desc = pbar.desc
-            pbar.set_description(gp_fit_desc)
-
-        # Run command
-        _run_command(gp_train_command, f"GP train")
-
-    elif args.opt_strategy == "DNGO":
-
-        new_bo_file = run_folder / f"bo_train_res.npz"
-        log_path = run_folder / f"bo_train.log"
-
-        dngo_train_command = [
-            "python",
-            DNGO_TRAIN_FILE,
-            f"--seed={iter_seed}",
-            f"--data_file={str(data_file)}",
-            f"--save_file={str(new_bo_file)}",
-            f"--logfile={str(log_path)}",
-        ]
-
-        # Add commands for initial fitting
-        dngo_fit_desc = "DNGO initial fit"
-
-        # Set pbar status for user
-        if pbar is not None:
-            old_desc = pbar.desc
-            pbar.set_description(dngo_fit_desc)
-
-        # Run command
-        _run_command(dngo_train_command, f"DNGO train")
-        curr_bo_file = new_bo_file
-
-    elif args.opt_strategy == "GBO":
-
-        new_gbo_file = run_folder / f"gbo_train_res.npz"
-        log_path = run_folder / f"gbo_train.log"
-
-        gbo_train_command = [
-            "python",
-            GBO_TRAIN_FILE,
-            f"--seed={iter_seed}",
-            f"--data_file={str(data_file)}",
-            f"--save_file={str(new_gbo_file)}",
-            f"--logfile={str(log_path)}",
-            f"--device={args.device}",
-            "--normalize_input",
-        ]
-
-        # Add commands for initial fitting
-        gbo_fit_desc = "GBO initial fit"
-
-        # Set pbar status for user
-        if pbar is not None:
-            pbar.set_description(gbo_fit_desc)
-
-        # Run command
-        _run_command(gbo_train_command, f"GBO train")
-        curr_gbo_file = new_gbo_file
-
-    # Part 2: optimize surrogate acquisition func to query point
-    # ===============================
-    
     if args.opt_strategy in ["GP", "DNGO"]:
 
-        # Run optimization
+        # -- 1. Fit surrogate model ------------------------------- #
+
+        new_bo_file = run_folder / f"bo_train_res.npz"
+        log_path = run_folder / f"bo_train.log"
+
+        if args.opt_strategy == "GP":
+
+            gp_train_command = [
+                "python",
+                GP_TRAIN_FILE,
+                f"--nZ={args.n_inducing_points}",
+                f"--seed={iter_seed}",
+                f"--data_file={str(data_file)}",
+                f"--save_file={str(new_bo_file)}",
+                f"--logfile={str(log_path)}",
+                f"--device={args.device}",
+                "--kmeans_init",
+            ]
+
+            if pbar is not None:
+                pbar.set_description("GP initial fit")
+
+            _run_command(gp_train_command, f"GP train")
+
+        elif args.opt_strategy == "DNGO":
+
+            dngo_train_command = [
+                "python",
+                DNGO_TRAIN_FILE,
+                f"--seed={iter_seed}",
+                f"--data_file={str(data_file)}",
+                f"--save_file={str(new_bo_file)}",
+                f"--logfile={str(log_path)}",
+            ]
+
+            if pbar is not None:
+                pbar.set_description("DNGO initial fit")
+
+            _run_command(dngo_train_command, f"DNGO train")
+
+        curr_bo_file = new_bo_file
+
+        # -- 2. Optimize surrogate acquisition function ----------- #
+        
         opt_path = run_folder / f"bo_opt_res.npy"
         log_path = run_folder / f"bo_opt.log"
+
         dngo_opt_command = [
             "python",
-            OPT_FILE,
+            BO_OPT_FILE,
             f"--seed={iter_seed}",
+            f"--surrogate_type={args.bo_surrogate}",
             f"--surrogate_file={str(curr_bo_file)}",
             f"--data_file={str(data_file)}",
             f"--save_file={str(opt_path)}",
@@ -412,9 +373,34 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
 
     elif args.opt_strategy == "GBO":
 
-        # Run optimization
+        # -- 1. Fit surrogate model ------------------------------- #
+
+        new_gbo_file = run_folder / f"gbo_train_res.npz"
+        log_path = run_folder / f"gbo_train.log"
+
+        gbo_train_command = [
+            "python",
+            GBO_TRAIN_FILE,
+            f"--seed={iter_seed}",
+            f"--data_file={str(data_file)}",
+            f"--save_file={str(new_gbo_file)}",
+            f"--logfile={str(log_path)}",
+            f"--device={args.device}",
+            "--normalize_input",
+        ]
+
+        if pbar is not None:
+            pbar.set_description("GBO initial fit")
+
+        _run_command(gbo_train_command, f"GBO train")
+
+        curr_gbo_file = new_gbo_file
+
+        # -- 2. Optimize surrogate acquisition function ----------- #
+
         opt_path = run_folder / f"gbo_opt_res.npy"
         log_path = run_folder / f"gbo_opt.log"
+
         gbo_opt_command = [
             "python",
             GBO_OPT_FILE,
@@ -428,7 +414,33 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
 
         if pbar is not None:
             pbar.set_description("gradient-based optimization")
+
         _run_command(gbo_opt_command, f"GBO opt")
+
+    elif args.opt_strategy == "ENTMOOT":
+
+        # Fitting and optimizing surrogate model (in one script)
+       new_entmoot_file = run_folder / f"entmoot_opt_res.npy"
+       log_path = run_folder / f"entmoot_train_opt.log"
+
+       entmoot_train_opt_command = [
+            "python",
+            ENTMOOT_TRAIN_OPT_FILE,
+            f"--seed={iter_seed}",
+            f"--data_file={str(data_file)}",
+            f"--save_file={str(new_entmoot_file)}",
+            f"--predictor_path={str(args.predictor_path)}",
+            f"--scaled_predictor={str(args.scaled_predictor)}",
+            f"--predictor_attr_file={str(args.predictor_attr_file)}",
+            f"--n_starts={str(args.n_starts)}",
+            f"--n_out={str(num_queries_to_do)}",
+            f"--logfile={str(log_path)}",
+       ]
+
+       if pbar is not None:
+           pbar.set_description("ENTMOOT training and optimization")
+
+       _run_command(entmoot_train_opt_command, f"ENTMOOT train and opt")
 
 
     # Load point
