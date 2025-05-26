@@ -169,16 +169,24 @@ class SmileClassifier:
         return all_outputs[0] if len(tensor_paths) == 1 else all_outputs
 
 
-    def classify_from_tensor(self, images, batch_size=128, return_prob=False):
-        """"
+    def classify(self, images, batch_size=128, return_prob=False):
+        """
         Classify a single image or a batch of images from tensors.
         Args:
-            images (torch.Tensor or list): Image tensor(s) to classify.
+            images (torch.Tensor or np.ndarray): Image(s) to classify.
             batch_size (int): Batch size for processing.
             return_prob (bool): If True, return probabilities instead of smile scores.
         Returns:
             np.ndarray: Smile scores or probabilities for the input images.
         """
+        # Catch numpy arrays and convert to torch tensors
+        if isinstance(images, np.ndarray):
+            images = torch.from_numpy(images)
+
+        # Add batch dimension if needed
+        if images.dim() == 3:
+            images = images.unsqueeze(0)
+
         # Split input into smaller batches
         outputs = []
         for start_idx in range(0, len(images), batch_size):
@@ -201,10 +209,10 @@ class SmileClassifier:
             outputs.extend(probs[SMILE_ATTR_IDX_NEW].tolist() if return_prob else scores.tolist())
 
         # Return single result if only one input
-        return outputs[0] if len(images) == 1 else np.array(outputs)
+        return outputs[0] if images.shape[0] == 1 else np.array(outputs)
 
 
     def __call__(self, *args, **kwds):
         """Classify images using the model."""
         # If called, run classification
-        return self.classify_from_tensor(*args, **kwds)
+        return self.classify(*args, **kwds)
