@@ -680,12 +680,20 @@ class LatentVQVAE(LatentModel):
         z_channels = ddconfig["z_channels"]
         remap = ddconfig["remap"]
         sane_index_shape = ddconfig["sane_index_shape"]
+        ch_mult = ddconfig["ch_mult"]
+        resolution = ddconfig["resolution"]
 
-        # Setup quantizer
-        self.quantize = VectorQuantizer(n_embed, embed_dim, beta=0.05,
-                                         remap=remap, sane_index_shape=sane_index_shape)
-        self.quant_conv = torch.nn.Conv2d(z_channels, embed_dim, 1)
-        self.post_quant_conv = torch.nn.Conv2d(embed_dim, z_channels, 1)
+        # Calculate bottleneck spatial dimensions
+        bottleneck_resolution = resolution // (2 ** (len(ch_mult)-1))
+        assert bottleneck_resolution * bottleneck_resolution == embed_dim, \
+            f"`embed_dim` ({embed_dim}) must be equal to bottleneck_resolution^2"
+        self.latent_dim = (bottleneck_resolution, bottleneck_resolution, z_channels)
+
+        # Setup quantizer (B, z_channels, H, W)
+        self.quant_conv = torch.nn.Conv2d(z_channels, z_channels, 1)
+        self.quantize = VectorQuantizer(n_embed, z_channels, beta=0.05,
+                                        remap=remap, sane_index_shape=sane_index_shape)
+        self.post_quant_conv = torch.nn.Conv2d(z_channels, z_channels, 1)
 
         # Initialize from checkpoint if provided
         if ckpt_path is not None:
@@ -697,12 +705,13 @@ class LatentVQVAE(LatentModel):
         Args:
             x (torch.Tensor): Input latent tensor of shape (B, C, H, W).
         Returns:
-            tuple: Quantized tensor, embedding loss, and quantization info.
+            tuple: Quantized tensor, embedding loss, and indices.
         """
         h = self.encoder(x)
         h = self.quant_conv(h)
-        quant, emb_loss, info = self.quantize(h)
-        return quant, emb_loss, info
+        quant, emb_loss, (_,_,ind) = self.quantize(h)
+        ind = ind.reshape(ind.shape[0], -1) # Flatten indices to (B, embed_dim)
+        return quant, emb_loss, ind
 
     def encode_to_prequant(self, x):
         """
@@ -720,7 +729,7 @@ class LatentVQVAE(LatentModel):
         """
         Decode a quantized tensor to a higher dimension.
         Args:
-            quant (torch.Tensor): Input quantized tensor of shape (B, C, H, W).
+            quant (torch.Tensor): Input quantized tensor of shape (B, z_channels, H, W).
         Returns:
             torch.Tensor: Reconstructed tensor of shape (B, C, H, W).
         """
@@ -730,13 +739,16 @@ class LatentVQVAE(LatentModel):
 
     def decode_code(self, code_b):
         """
-        Decode an unquantized tensor to a higher dimension.
+        Decode a tensor of indices to a higher dimensional representation.
         Args:
-            code_b (torch.Tensor): Input unquantized tensor of shape (B, C, H, W).
+            code_b (torch.Tensor): Tensor containing indices of shape (B, embed_dim) or (embed_dim).
         Returns:
             torch.Tensor: Reconstructed tensor of shape (B, C, H, W).
         """
-        quant_b = self.quantize(code_b)[0]
+        if code_b.dim() == 1:
+            # If code_b is a single vector, reshape it to (1, embed_dim)
+            code_b = code_b.unsqueeze(0)
+        quant_b = self.quantize.get_codebook_entry(code_b, shape=(code_b.shape[0], *self.latent_dim))
         dec = self.decode(quant_b)
         return dec
     
@@ -750,7 +762,7 @@ class LatentVQVAE(LatentModel):
         Returns:
             tuple: Reconstructed tensor, embedding loss, and predicted indices (if requested).
         """
-        quant, diff, (_,_,ind) = self.encode(input)
+        quant, diff, ind = self.encode(input)
         dec = self.decode(quant)
         if return_only_recon:
             return dec

@@ -150,7 +150,7 @@ class VectorQuantizer2(nn.Module):
             indices (torch.Tensor): Indices to get the codebook entry for.
             shape (tuple): Shape of the input tensor.
         Returns:
-            z_q (torch.Tensor): Codebook entry of shape (B, H, W, C).
+            z_q (torch.Tensor): Codebook entry of shape (B, C, H, W).
         """
         # shape specifying (batch, height, width, channel)
         if self.remap is not None:
