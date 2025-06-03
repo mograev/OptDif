@@ -3,7 +3,7 @@
 #SBATCH --job-name=train_latent_vae      # Job name
 #SBATCH --output=logs/latent_vae/%j.out  # Output log file
 #SBATCH --error=logs/latent_vae/%j.err   # Error log file
-#SBATCH --time=2:00:00                   # Maximum runtime (hh:mm:ss)
+#SBATCH --time=48:00:00                   # Maximum runtime (hh:mm:ss)
 #SBATCH --partition=gpu_a100_il          # Partition to submit the job to
 #SBATCH --gres=gpu:4                     # Request GPU resources
 
@@ -23,10 +23,10 @@ weight_type="uniform"
 
 # Model & Training
 model_type="LatentVAE"
-model_version=18
+model_version=20
 model_config_path="models/latent_vae/configs/sd35m_to_8k_lpips_disc.yaml"
 model_output_dir="models/latent_vae/"
-max_epochs=100
+max_epochs=200
 device="cuda"
 num_devices=4
 

@@ -1,16 +1,16 @@
 ddconfig:
     double_z: true
-    z_channels: 32
+    z_channels: 64
     resolution: 32
     in_channels: 16
     out_ch: 16
     ch: 16
-    ch_mult: [1, 2]
+    ch_mult: [1, 2, 4]
     num_res_blocks: 2
     attn_resolutions: []
     dropout: 0.0
     attn_type: "none"
-    embed_dim: 8192
+    embed_dim: 4096
 lossconfig:
     target: "src.models.modules.losses.LPIPSWithDiscriminator"
     params:
@@ -25,5 +25,4 @@ lossconfig:
         disc_in_channels: 3
         use_actnorm: false
         disc_loss: "hinge_r1"
-        pixel_loss: "l1"
 learning_rate: 4.5e-6

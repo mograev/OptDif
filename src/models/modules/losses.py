@@ -68,7 +68,8 @@ class LPIPSWithDiscriminator(nn.Module):
                  disc_num_layers=3,
                  disc_in_channels=3,
                  use_actnorm=False,
-                 disc_loss="hinge"
+                 disc_loss="hinge",
+                 pixel_loss="l2"
                 ):
         """
         LPIPS + MSE loss with discriminator for linear autoencoder.
@@ -94,6 +95,12 @@ class LPIPSWithDiscriminator(nn.Module):
         self.perceptual_weight = perceptual_weight
         self.kl_weight = kl_weight
         self.disc_weight = disc_weight
+
+        # Reconstruction loss
+        if pixel_loss == "l1":
+            self.pixel_loss = torch.nn.L1Loss(reduction="mean")
+        elif pixel_loss == "l2":
+            self.pixel_loss = torch.nn.MSELoss(reduction="mean")
 
         # Perceptual loss
         self.perceptual_loss = LPIPS().eval()
@@ -138,8 +145,8 @@ class LPIPSWithDiscriminator(nn.Module):
             # ---- Generator update ------------------------------- #
 
             # Reconstruction losses
-            rec_lat = F.mse_loss(recons.contiguous(), inputs.contiguous(), reduction="mean")
-            rec_img = F.mse_loss(img_recons.contiguous(), img_inputs.contiguous(), reduction="mean")
+            rec_lat = self.pixel_loss(recons.contiguous(), inputs.contiguous())
+            rec_img = self.pixel_loss(img_recons.contiguous(), img_inputs.contiguous())
 
             # Perceptual loss
             perc_img = self.perceptual_loss(img_inputs.contiguous(), img_recons.contiguous()).mean()

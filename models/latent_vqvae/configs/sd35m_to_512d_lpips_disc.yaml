@@ -11,9 +11,9 @@ ddconfig:
     dropout: 0.0
     attn_type: "vanilla"
     n_embed: 1024
-    embed_dim: 8
+    embed_dim: 64 # flattened dimension of the discrete indices
     remap: null
-    sane_index_shape: false
+    sane_index_shape: true
 lossconfig:
     target: "src.models.modules.losses.VQLPIPSWithDiscriminator"
     params:
