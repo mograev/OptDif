@@ -27,7 +27,7 @@ from src.dataloader.weighting import DataWeighter
 from src.classification.smile_classifier import SmileClassifier
 from src.models.lit_vae import LitVAE
 from src.utils import SubmissivePlProgressbar
-from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE, ENTMOOT_TRAIN_OPT_FILE
+from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE, ENTMOOT_TRAIN_OPT_FILE, GBO_PCA_TRAIN_FILE, GBO_PCA_OPT_FILE
 
 
 # Weighted Retraining arguments
@@ -55,7 +55,7 @@ def add_opt_args(parser):
 
     # Common arguments
     opt_group = parser.add_argument_group("Optimization")
-    opt_group.add_argument("--opt_strategy", type=str, choices=["GBO", "DNGO", "GP"], help="Optimization strategy to use")
+    opt_group.add_argument("--opt_strategy", type=str, choices=["GBO", "DNGO", "GP", "GBO_PCA"], help="Optimization strategy to use")
     opt_group.add_argument("--n_out", type=int, default=5, help="Number of points to return from optimization")
     opt_group.add_argument("--n_starts", type=int, default=20, help="Number of optimization runs with different initial values")
     opt_group.add_argument("--n_rand_points", type=int, default=8000, help="Number of random points to sample for surrogate model training")
@@ -73,6 +73,9 @@ def add_opt_args(parser):
 
     # GP arguments
     bo_group.add_argument("--n_inducing_points", type=int, default=500, help="Number of inducing points to use for GP (if initializing)")
+
+    # PCA arguments
+    opt_group.add_argument("--n_pca_components", type=int, default=1024, help="Number of PCA components to use for GBO PCA optimization")
 
     return parser
 
@@ -107,7 +110,6 @@ def _retrain_vae(vae, datamodule, save_dir, version_str, num_epochs, device):
 
     # Make sure logs don't get in the way of progress bars
     pl._logger.setLevel(logging.CRITICAL)
-    train_pbar = SubmissivePlProgressbar(process_position=1)
 
     # Create custom saver and logger
     tb_logger = pl.loggers.TensorBoardLogger(
@@ -116,7 +118,7 @@ def _retrain_vae(vae, datamodule, save_dir, version_str, num_epochs, device):
     checkpointer = pl.callbacks.ModelCheckpoint(save_last=True, monitor="val/total_loss")
 
     # Wrap the VAE in a Lightning module
-    vae_module = LitVAE(model=vae, beta=1.e-5)
+    vae_module = LitVAE(model=vae, beta=1.e-7)
 
     # Handle fractional epochs
     if num_epochs < 1:
@@ -135,9 +137,10 @@ def _retrain_vae(vae, datamodule, save_dir, version_str, num_epochs, device):
             accelerator="gpu" if device == "cuda" else "cpu",
             max_epochs=max_epochs,
             limit_train_batches=limit_train_batches,
+            log_every_n_steps=10,
             limit_val_batches=1,
             logger=tb_logger,
-            callbacks=[train_pbar, checkpointer],
+            callbacks=[checkpointer],
             enable_progress_bar=True,
         )
 
@@ -371,7 +374,7 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
             pbar.set_description("optimizing acq func")
         _run_command(dngo_opt_command, f"Surrogate opt")
 
-    elif args.opt_strategy == "GBO":
+    elif args.opt_strategy in ["GBO", "GBO_PCA"]:
 
         # -- 1. Fit surrogate model ------------------------------- #
 
@@ -380,14 +383,19 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
 
         gbo_train_command = [
             "python",
-            GBO_TRAIN_FILE,
+            GBO_TRAIN_FILE if args.opt_strategy == "GBO" else GBO_PCA_TRAIN_FILE,
             f"--seed={iter_seed}",
             f"--data_file={str(data_file)}",
             f"--save_file={str(new_gbo_file)}",
             f"--logfile={str(log_path)}",
             f"--device={args.device}",
-            "--normalize_input",
         ]
+
+        if args.opt_strategy == "GBO":
+            gbo_train_command.append("--normalize_input")
+
+        if args.opt_strategy == "GBO_PCA":
+            gbo_train_command.append(f"--n_pca_components={args.n_pca_components}")
 
         if pbar is not None:
             pbar.set_description("GBO initial fit")
@@ -398,19 +406,23 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
 
         # -- 2. Optimize surrogate acquisition function ----------- #
 
-        opt_path = run_folder / f"gbo_opt_res.npy"
+        opt_path = run_folder / f"gbo_opt_res.npz"
         log_path = run_folder / f"gbo_opt.log"
 
         gbo_opt_command = [
             "python",
-            GBO_OPT_FILE,
+            GBO_OPT_FILE if args.opt_strategy == "GBO" else GBO_PCA_OPT_FILE,
             f"--seed={iter_seed}",
             f"--model_file={str(curr_gbo_file)}",
+            f"--data_file={str(data_file)}",
             f"--save_file={str(opt_path)}",
             f"--logfile={str(log_path)}",
             f"--n_starts={args.n_starts}",
             f"--n_out={str(num_queries_to_do)}",
         ]
+
+        if args.opt_strategy == "GBO_PCA":
+            gbo_opt_command.append(f"--n_pca_components={args.n_pca_components}")
 
         if pbar is not None:
             pbar.set_description("gradient-based optimization")
@@ -443,8 +455,10 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
        _run_command(entmoot_train_opt_command, f"ENTMOOT train and opt")
 
 
-    # Load point
-    z_opt = np.load(opt_path)
+    # Load point (and init points if available)
+    results = np.load(opt_path, allow_pickle=True)
+    z_opt = results["z_opt"]
+    z_init = results.get("z_init", None)
     
     # Decode point
     x_new, y_new = _decode_and_predict(
@@ -453,6 +467,15 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
         torch.as_tensor(z_opt, device=device),
         device
     )
+
+    # Decode initial points if available
+    if z_init is not None:
+        x_new_init, _ = _decode_and_predict(
+            sd_vae,
+            predictor,
+            torch.as_tensor(z_init, device=device),
+            device
+        )
 
     # Reset pbar description
     if pbar is not None:
@@ -463,8 +486,11 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
             postfix["best"] = max(postfix["best"], float(max(y_new)))
             pbar.set_postfix(postfix)
 
-    # Update datamodule with ALL data points
-    return x_new, y_new, z_opt
+    # Return data points
+    if x_new_init is not None:
+        return (x_new, y_new, z_opt, x_new_init)
+    else:
+        return (x_new, y_new, z_opt)
 
 
 def main_loop(args):
@@ -574,7 +600,7 @@ def main_loop(args):
             opt_data_file = opt_dir / "data.npz"
 
             # Perform latent optimization
-            x_new, y_new, z_query = latent_optimization(
+            lso_results = latent_optimization(
                 args,
                 sd_vae,
                 predictor,
@@ -586,6 +612,11 @@ def main_loop(args):
                 pbar=pbar,
                 postfix=postfix,
             )
+
+            if len(lso_results) == 4:
+                x_new, y_new, z_query, x_new_init = lso_results
+            else:
+                x_new, y_new, z_query = lso_results
 
             # Create a new directory for the sampled data
             curr_samples_dir = Path(samples_dir) / f"iter_{samples_so_far}"
@@ -606,6 +637,14 @@ def main_loop(args):
                     x = torch.from_numpy(x)
                 torch.save(x, str(Path(curr_samples_dir) / f"img_tensor/tensor_{i}.pt"), pickle_protocol=pickle.HIGHEST_PROTOCOL)
                 new_filename_list.append(str(Path(curr_samples_dir) / f"img_tensor/tensor_{i}.pt"))
+
+            # Save initial points if available
+            if x_new_init is not None:
+                os.makedirs(curr_samples_dir / "img_tensor_init")
+                for i, x in enumerate(x_new_init):
+                    if not isinstance(x, torch.Tensor):
+                        x = torch.from_numpy(x)
+                    torch.save(x, str(Path(curr_samples_dir) / f"img_tensor_init/tensor_{i}.pt"), pickle_protocol=pickle.HIGHEST_PROTOCOL)
             
             # Append new points to dataset and adapt weighting
             datamodule.append_train_data(new_filename_list, y_new)
