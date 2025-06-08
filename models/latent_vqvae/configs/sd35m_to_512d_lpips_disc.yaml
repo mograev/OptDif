@@ -7,10 +7,10 @@ ddconfig:
     ch: 64
     ch_mult: [1, 2, 2]
     num_res_blocks: 2
-    attn_resolutions: [16]
+    attn_resolutions: []
     dropout: 0.0
-    attn_type: "vanilla"
-    n_embed: 1024
+    attn_type: "none"
+    n_embed: 2048
     embed_dim: 64 # flattened dimension of the discrete indices
     remap: null
     sane_index_shape: true
@@ -21,12 +21,12 @@ lossconfig:
         rec_img_weight: 1.0
         rec_lat_weight: 1.0
         perceptual_weight: 1.0
-        codebook_weight: 0.25
+        codebook_weight: 0.75
         disc_weight: 0.5
         disc_num_layers: 3
         disc_in_channels: 3
         use_actnorm: false
         disc_loss: "hinge_r1"
         pixel_loss: "l1"
-        n_embed: 1024
+        n_embed: 2048
 learning_rate: 1.0e-4

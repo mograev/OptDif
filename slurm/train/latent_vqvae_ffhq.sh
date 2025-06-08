@@ -1,19 +1,20 @@
 #!/bin/bash
 
-#SBATCH --job-name=train_latent_vqvae        # Job name
-#SBATCH --output=logs/latent_vqvae/%j.out    # Output log file
-#SBATCH --error=logs/latent_vqvae/%j.err     # Error log file
-#SBATCH --time=12:00:00                      # Maximum runtime (hh:mm:ss)
-#SBATCH --partition=gpu_a100_il              # Partition to submit the job to
-#SBATCH --gres=gpu:4                         # Request GPU resources
+#SBATCH --job-name=train_latent_vqvae           # Job name
+#SBATCH --output=logs/latent_vqvae/v8_%j.out    # Output log file
+#SBATCH --error=logs/latent_vqvae/v8_%j.err     # Error log file
+#SBATCH --time=7-00:00:00                       # Maximum runtime (d-hh:mm:ss)
+#SBATCH --partition=gpu20                       # Partition to submit the job to
+#SBATCH --gres=gpu:4                            # Request GPU resources
+#SBATCH --mem=0                                 # Use all available memory
 
 # Dataloader
-img_dir="data/ffhq/images1024x1024"
-img_tensor_dir="data/ffhq/pt_images"
-attr_path="data/ffhq/ffhq_smile_scores.json"
+img_dir="/BS/robust-architectures/work/OptDif/data/ffhq/images1024x1024"
+img_tensor_dir="/BS/robust-architectures/work/OptDif/data/ffhq/pt_images"
+attr_path="/BS/robust-architectures/work/OptDif/data/ffhq/ffhq_smile_scores.json"
 max_property_value=5
 min_property_value=0
-batch_size=32
+batch_size=16
 num_workers=8
 val_split=0.1
 data_device="cuda"
@@ -26,13 +27,9 @@ model_type="LatentVQVAE"
 model_version=8
 model_config_path="models/latent_vqvae/configs/sd35m_to_512d_lpips_disc.yaml"
 model_output_dir="models/latent_vqvae/"
-max_epochs=100
+max_epochs=200
 device="cuda"
 num_devices=4
-
-# Clear interfering Python paths (when using JupyterHub)
-unset PYTHONPATH
-export PYTHONPATH=/pfs/work9/workspace/scratch/ma_mgraevin-optdif:$PYTHONPATH
 
 # Initialize Conda for the current shell
 eval "$(conda shell.bash hook)"
@@ -40,7 +37,7 @@ eval "$(conda shell.bash hook)"
 # Activate the conda environment
 conda activate optdif1
 
-# Run the Python script with specified arguments (using srun for SLURM)
+# Run the Python script with specified arguments
 python src/run/train_latent_model_ffhq.py \
     --img_dir $img_dir \
     --img_tensor_dir $img_tensor_dir \
