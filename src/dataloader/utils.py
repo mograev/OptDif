@@ -9,6 +9,7 @@ from PIL import Image
 import torch
 from torch.utils.data import Dataset
 from torchvision import transforms
+from torchvision.datasets import ImageFolder
 
 
 class SimpleFilenameToTensorDataset(Dataset):
@@ -155,3 +156,58 @@ class MultiModeDataset(Dataset):
     def __len__(self):
         """Returns the length of the dataset"""
         return len(self.filename_list)
+
+
+class ImageFolderToLatentDataset(Dataset):
+    """
+    Implements a dataset that loads latents from image folder
+    """
+    def __init__(
+        self,
+        img_dir,
+        encoder,
+        device='cpu',
+        transform=None
+    ):
+        """
+        Args:
+            img_dir: Directory containing the images
+            encoder: Encoder to use for encoding images
+            device: Device to load the encoder onto ('cpu' or 'cuda')
+            transform: Optional transformation to apply to the images
+        """
+        self.img_dir = img_dir
+        self.encoder = encoder.eval().to(device)
+        self.device = device
+        self.transform = transform or transforms.ToTensor()
+
+        # Setup image folder
+        self.img_folder = ImageFolder(
+            root=img_dir,
+            transform=self.transform
+        )
+
+    def __getitem__(self, index):
+        """
+        Args:
+            index: Index of the item to retrieve
+        Returns:
+            tensor: Loaded latent tensor corresponding to the filename
+        """
+        # Get the image
+        img_tensor, _ = self.img_folder[index]
+
+        # Move image tensor to the *same* device as the encoder to avoid device‑mismatch
+        encoder_device = next(self.encoder.parameters()).device
+        img_tensor = img_tensor.unsqueeze(0).to(encoder_device, non_blocking=True)
+
+        # Encode the image to a latent tensor
+        with torch.no_grad():
+            latent_tensor = self.encoder.encode(img_tensor).latent_dist.sample()
+
+        # Always move the latent back to CPU so that the DataLoader can share it safely
+        latent_tensor = latent_tensor.squeeze(0).cpu()
+        return latent_tensor
+
+    def __len__(self):
+        return len(self.img_folder)

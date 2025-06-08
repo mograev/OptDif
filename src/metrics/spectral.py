@@ -16,9 +16,19 @@ class SpectralScore:
     f_cached_stats_real = "spectral.stats_real.{}.cache"
     
     ############################################################
-    def __init__(self, img_size, device="cpu"):
+    def __init__(self, img_size, device="cpu", batch_size=32, num_workers=4):
+        """
+        Initialize the SpectralScore class.
+        Args:
+            img_size (int): The size of the images (assumed square).
+            device (str): The device to use for computation (e.g., "cpu" or "cuda").
+            batch_size (int): The batch size for processing images.
+            num_workers (int): The number of workers for the DataLoader.
+        """
         self.device   = device
         self.img_size = img_size
+        self.batch_size = batch_size
+        self.num_workers = num_workers
 
         print(f"Using device for SpectralScore: {self.device}")
 
@@ -57,12 +67,11 @@ class SpectralScore:
             self.is_fitted = False
     
     ############################################################
-    def fit(self, data, batch_size=32, eps=1e-8):
+    def fit(self, data, eps=1e-8):
         """
         Compute the mean radial spectrum for a dataset.
         Args:
             data (torch.utils.data.Dataset): The dataset to compute the statistics from.
-            batch_size (int): The batch size for data loading.
             eps (float): A small value to avoid division by zero.
         Returns:
             mu (numpy.ndarray): The mean radial spectrum.
@@ -72,8 +81,9 @@ class SpectralScore:
         pred_arr   = np.empty((data_size, dims), dtype=np.float64)
         dataloader = torch.utils.data.DataLoader(
             data,
-            batch_size=batch_size,
-            num_workers=4
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            persistent_workers=True if self.num_workers > 0 else False,
         )
 
         i_arr = 0

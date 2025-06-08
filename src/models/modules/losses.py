@@ -44,7 +44,7 @@ def measure_perplexity(predicted_indices, n_classes):
         cluster_usage: Cluster usage statistics.
     """
     # Calculate the number of samples in each cluster
-    cluster_usage = torch.bincount(predicted_indices, minlength=n_classes).float()
+    cluster_usage = torch.bincount(predicted_indices.reshape(-1), minlength=n_classes).float()
     
     # Calculate the perplexity
     p = cluster_usage / cluster_usage.sum()
@@ -59,7 +59,6 @@ class LPIPSWithDiscriminator(nn.Module):
     """
     def __init__(self,
                  disc_start=0,
-                 logvar_init=0.0,
                  rec_img_weight=1.0,
                  rec_lat_weight=1.0,
                  perceptual_weight=1.0,
@@ -75,7 +74,6 @@ class LPIPSWithDiscriminator(nn.Module):
         LPIPS + MSE loss with discriminator for linear autoencoder.
         Args:
             disc_start: Step at which the discriminator starts training.
-            logvar_init: Initial value for the log variance parameter.
             rec_img_weight: Weight for the image reconstruction loss term.
             rec_lat_weight: Weight for the latent reconstruction loss term.
             perceptual_weight: Weight for the perceptual loss term.
@@ -104,9 +102,6 @@ class LPIPSWithDiscriminator(nn.Module):
 
         # Perceptual loss
         self.perceptual_loss = LPIPS().eval()
-
-        # output log variance
-        self.logvar = nn.Parameter(torch.ones(size=()) * logvar_init)
 
         # Discriminator
         self.discriminator = NLayerDiscriminator(
@@ -153,7 +148,7 @@ class LPIPSWithDiscriminator(nn.Module):
 
             # Total NLL loss
             nll_loss = (self.rec_lat_weight * rec_lat + self.rec_img_weight * rec_img
-                        + self.perceptual_weight * perc_img) / torch.exp(self.logvar) + self.logvar
+                        + self.perceptual_weight * perc_img)
 
             # KL loss
             kl_loss = posterior.kl().mean()
@@ -168,7 +163,6 @@ class LPIPSWithDiscriminator(nn.Module):
                 "{}/rec_lat_loss".format(split): rec_lat.detach(),
                 "{}/rec_img_loss".format(split): rec_img.detach(),
                 "{}/perc_img_loss".format(split): perc_img.detach(),
-                "{}/logvar".format(split): self.logvar.detach(),
                 "{}/nll_loss".format(split): nll_loss.detach(),
                 "{}/kl_loss".format(split): kl_loss.detach(),
                 "{}/gen_loss".format(split): gen_loss.detach(),
@@ -466,7 +460,7 @@ class VQLPIPSWithDiscriminator(nn.Module):
                 "{}/gen_loss".format(split): gen_loss.detach(),
             }
             
-            # Add perplexity and cluster usage to the log
+            # Add perplexity to the log
             if predicted_indices is not None:
                 assert self.n_classes is not None
                 with torch.no_grad():
@@ -735,3 +729,72 @@ class LPIPSMSELoss(nn.Module):
             "{}/lpips_loss".format(split): lpips_loss.detach(),
             "{}/total_loss".format(split): total_loss.detach()
         }
+
+
+class SDVAELoss(nn.Module):
+    """
+    Loss for training a Stable Diffusion Variational Autoencoder.
+    """
+    def __init__(self,
+                 rec_weight=1.0,
+                 perceptual_weight=1.0,
+                 kl_weight=1e-6,
+                 pixel_loss="l2"
+                ):
+        """
+        LPIPS + MSE + KL loss for Stable Diffusion VAE.
+        Args:
+            rec_weight: Weight for the image reconstruction loss term.
+            perceptual_weight: Weight for the perceptual loss term.
+            kl_weight: Weight for the KL divergence term.
+            pixel_loss: Type of pixel loss function to use ("l1", "l2").
+        """
+        super().__init__()
+        assert pixel_loss in ["l1", "l2"]
+
+        # Store loss weights
+        self.rec_weight = rec_weight
+        self.perceptual_weight = perceptual_weight
+        self.kl_weight = kl_weight
+        self.pixel_loss = pixel_loss
+
+        # Reconstruction loss
+        if pixel_loss == "l1":
+            self.pixel_loss = torch.nn.L1Loss(reduction="mean")
+        elif pixel_loss == "l2":
+            self.pixel_loss = torch.nn.MSELoss(reduction="mean")
+
+        # Perceptual loss
+        self.perceptual_loss = LPIPS().eval()
+        
+
+    def forward(self, inputs, recons, latents, split="train"):
+        """
+        Forward pass for loss computation.
+        Args:
+            inputs: Original input tensor (SD latents).
+            recons: Reconstructed output tensor (SD latents).
+            split: Split name (train/val/test) for logging purposes.
+        """
+        # Reconstruction loss
+        rec_loss = self.pixel_loss(recons.contiguous(), inputs.contiguous())
+
+        # Perceptual loss
+        perc_img = self.perceptual_loss(inputs.contiguous(), recons.contiguous()).mean()
+
+        # KL loss
+        kl_loss = -0.5 * torch.sum(
+            1 + latents.logvar - latents.mean.pow(2) - latents.var
+        ) / inputs.shape[0]
+
+        # Total loss
+        loss = self.rec_weight * rec_loss + self.perceptual_weight * perc_img + self.kl_weight * kl_loss
+
+        log = {
+            "{}/rec_loss".format(split): rec_loss.detach(),
+            "{}/perc_img_loss".format(split): perc_img.detach(),
+            "{}/kl_loss".format(split): kl_loss.detach(),
+            "{}/total_loss".format(split): loss.detach()
+        }
+
+        return loss, log

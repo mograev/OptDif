@@ -17,22 +17,26 @@ class FIDScore:
     f_cached_stats_real = "inception.stats_real.{}.cache"
     
     ############################################################
-    def __init__(self, img_size, device="cpu"):
+    def __init__(self, img_size, device="cpu", batch_size=32, num_workers=4):
         """
         Initialize the FIDScore class.
         Args:
             img_size (int): The size of the images (assumed square).
             device (str): The device to use for computation (e.g., "cpu" or "cuda").
+            batch_size (int): The batch size for processing images.
+            num_workers (int): The number of workers for the DataLoader.
         """
         self.device = device
         print(f"Using device for FID: {self.device}")
         self.img_size = img_size
-        
+        self.batch_size = batch_size
+        self.num_workers = num_workers
+
         self.model = InceptionV3(
             resize_input = True,
             normalize_input = False
         )
-        
+
         self.model.eval()
         self.model.to(device)
         
@@ -64,9 +68,9 @@ class FIDScore:
         # Create a dataloader for the data
         dataloader = torch.utils.data.DataLoader(
             data,
-            batch_size=32,
-            num_workers=4,
-            persistent_workers=True,
+            batch_size=self.batch_size,
+            num_workers=self.num_workers,
+            persistent_workers=True if self.num_workers > 0 else False,
         )
 
         # Initialize an array to store the predictions, shaped (data_size, dims)
@@ -104,7 +108,7 @@ class FIDScore:
             print("FID already fitted, skipping.")
             return
         else:
-            print("FID ")
+            print("FID not fitted, computing real stats...")
             # Fit the model to the real data
             self.mu_real, self.sigma_real = self.fit(data_real)
 
