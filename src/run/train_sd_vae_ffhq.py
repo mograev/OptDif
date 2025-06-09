@@ -77,6 +77,8 @@ if __name__ == "__main__":
 
     # Load SD-VAE model
     sd_vae = AutoencoderKL.from_pretrained(args.model_path, subfolder="vae")
+    sd_vae.train()
+    sd_vae.requires_grad_(True)
 
     # Wrap in Lightning module
     model = LitVAE(
@@ -110,16 +112,20 @@ if __name__ == "__main__":
     with torch.autograd.set_detect_anomaly(True):
         # Create trainer
         trainer = pl.Trainer(
-            accelerator="gpu",
+            accelerator="gpu" if args.device == "cuda" else "cpu",
             devices=args.num_devices if args.device == "cuda" else 1,
             strategy="ddp_find_unused_parameters_true" if args.device == "cuda" else None,
             max_epochs=args.max_epochs,
-            limit_train_batches=0.01,
-            limit_val_batches=0.05,
+            limit_train_batches=1.0,
+            limit_val_batches=0.5,
             logger=tb_logger,
             callbacks=[checkpointer],
-            enable_progress_bar=True,
+            enable_progress_bar=False,
         )
 
         # Fit model
         trainer.fit(model, datamodule)
+
+    # -- Save final model ----------------------------------------- #
+
+    model.model.save_pretrained(args.model_output_dir + f"version_{args.model_version}/huggingface")

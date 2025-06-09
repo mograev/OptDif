@@ -16,7 +16,7 @@ class LitVAE(pl.LightningModule):
     def __init__(
             self,
             model,
-            learning_rate=1e-4,
+            learning_rate=4.5e-6,
             fid_instance=None,
             spectral_instance=None,
             **loss_kwargs
@@ -29,11 +29,12 @@ class LitVAE(pl.LightningModule):
             **loss_kwargs: Additional keyword arguments for loss configuration.
         """
         super().__init__()
-        self.save_hyperparameters(ignore="model")
+        self.save_hyperparameters(ignore=["model" , "fid_instance", "spectral_instance"])
         self.learning_rate = learning_rate
 
         # Initialize loss
         self.loss = SDVAELoss(**loss_kwargs)
+        self.loss.eval()
 
         # FID metric
         self.fid_instance = fid_instance
@@ -57,43 +58,53 @@ class LitVAE(pl.LightningModule):
     
     def training_step(self, batch, batch_idx):
         # Forward pass
-        x = batch
-        recon, latents = self.forward(x)
+        inputs = batch
+        recon, latents = self.forward(inputs)
 
         # Calculate the loss
         loss, log_dict = self.loss(
-            inputs=x,
+            inputs=inputs,
             recons=recon,
             latents=latents,
             split="train",
         )
 
         # Log losses
-        self.log_dict(log_dict, on_step=True, on_epoch=False)
+        self.log_dict(log_dict, on_step=True, on_epoch=False, sync_dist=True)
 
         return loss
     
     def validation_step(self, batch, batch_idx):
         # Forward pass
-        x = batch
-        recon, latents = self.forward(x)
+        inputs = batch
+        recon, latents = self.forward(inputs)
+
+        # Store reconstructed images for metric calculation
+        if self.track_fid or self.track_spectral:
+            self._val_recons_img.append(recon.cpu())
 
         # Calculate the loss
         loss, log_dict = self.loss(
-            inputs=x,
+            inputs=inputs,
             recons=recon,
             latents=latents,
             split="val",
         )
 
         # Log losses
-        self.log_dict(log_dict, on_step=True, on_epoch=False)
+        self.log_dict(log_dict, on_step=False, on_epoch=True, sync_dist=True)
 
         return loss
 
     def configure_optimizers(self):
         return torch.optim.AdamW(self.parameters(), lr=self.learning_rate)
     
+    def on_before_optimizer_step(self, optimizer):
+        # ensure DDP buckets see contiguous grads
+        for p in self.parameters():
+            if p.grad is not None and not p.grad.is_contiguous():
+                p.grad = p.grad.contiguous()
+
     def on_train_start(self):
         """Grab a fixed mini-batch of images for logging."""
         if self.global_rank == 0:

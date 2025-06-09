@@ -3,7 +3,7 @@
 #SBATCH --job-name=train_sd_vae          # Job name
 #SBATCH --output=logs/sd_vae/v0_%j.out   # Output log file
 #SBATCH --error=logs/sd_vae/v0_%j.err    # Error log file
-#SBATCH --time=00:30:00                  # Maximum runtime (hh:mm:ss)
+#SBATCH --time=12:00:00                  # Maximum runtime (hh:mm:ss)
 #SBATCH --partition=gpu20                # Partition to submit the job to
 #SBATCH --gres=gpu:4                     # Request GPU resources
 #SBATCH --mem=0                          # Use all available memory
@@ -25,8 +25,8 @@ weight_type="uniform"
 # Model & Training
 model_path="stabilityai/stable-diffusion-3.5-medium"
 model_version=0
-model_output_dir="models/sdvae/"
-max_epochs=50
+model_output_dir="models/sd_vae/"
+max_epochs=10
 device="cuda"
 num_devices=4
 

@@ -22,6 +22,7 @@ models/latent_vqvae/*
 models/latent_linear_ae/*
 !models/latent_linear_ae/configs/
 !models/latent_linear_ae/configs/**
+models/sd_vae
 taming/
 
 # Optimization results
