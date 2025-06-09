@@ -1,5 +1,6 @@
 """
 Gradient-Based Optimization in the PCA latent space of a neural network model.
+Optimization a subset of dimensions, that have a large feature importance.
 This script returns optimized latent variables.
 """
 
@@ -25,7 +26,7 @@ gbo_opt_group.add_argument("--data_file", type=str, help="file to load data from
 gbo_opt_group.add_argument("--save_file", type=str, required=True, help="path to save results to")
 gbo_opt_group.add_argument("--n_starts", type=int, default=1, help="number of random starts")
 gbo_opt_group.add_argument("--n_out", type=int, default=1, help="number of outputs")
-gbo_opt_group.add_argument("--n_pca_components", type=int, default=512, help="number of PCA components to use")
+gbo_opt_group.add_argument("--n_opt_dims", type=int, default=512, help="number of dimensions to optimize")
 gbo_opt_group.add_argument("--device", type=str, default="cpu", help="device to use for training (cpu or cuda)")
 
 
@@ -61,7 +62,7 @@ def opt_gbo(
     save_file,
     n_starts=1,
     n_out=1,
-    n_pca_components=1024,
+    n_opt_dims=512,
     device="cpu",
 ):
     
@@ -100,15 +101,9 @@ def opt_gbo(
     # Sample n_starts random points (rows) from the training data
     indices = np.random.choice(X_train.shape[0], n_starts)
     X_sampled = X_train[indices]
-
-    # Reinitialize PCA
-    pca = PCA().set_params(n_components=ckpt['pca_components'].shape[0])
-    pca.components_, pca.mean_, pca.explained_variance_ = ckpt['pca_components'], ckpt['pca_mean'], ckpt['pca_explained_variance']
-    pca.explained_variance_ratio_ = ckpt['pca_explained_variance_ratio']
-
-    # Transform sampled data using PCA
-    latent_pca_grid = torch.tensor(pca.transform(X_sampled), device=device, dtype=torch.float32)
-    logger.info(f"Latent PCA grid shape: {latent_pca_grid.shape}")
+    
+    # Get important dimensions
+    opt_dims = ckpt['fi_dims']
 
     # Run optimization
     logger.info("\n### STARTING OPTIMIZATION ###\n")
@@ -118,19 +113,18 @@ def opt_gbo(
 
     for i in range(n_starts):
         logger.info(f"X_start: {X_sampled[i]}")
+        logger.info(f"opt dims dimensionality: {X_sampled[i, opt_dims].shape}")
 
-        # Get variable and fixed PCA components
-        z_pca = latent_pca_grid[i, :n_pca_components].unsqueeze(0).to(device)
-        z_pca_fixed = latent_pca_grid[i, n_pca_components:].unsqueeze(0).to(device)
+        # Get important dimensions of input
+        z = torch.tensor(X_sampled[i, opt_dims], dtype=torch.float32, device=device).unsqueeze(0)
 
         # Optimizer setup
-        z_pca.requires_grad = True
-        optimizer = torch.optim.Adam([z_pca], lr=1e-3)
-        n_steps = 5000
+        z.requires_grad = True
+        optimizer = torch.optim.Adam([z], lr=1e-3)
+        n_steps = 2000
 
         # Adaptive ALM setup
-        # radius in PCA‐space matching original latent‐space ball
-        R_pca = np.sqrt(np.sum(pca.explained_variance_[:n_pca_components]))
+        R = z.shape[1] ** 0.5
         lam = 0.0
         mu = 10.0
         eta1, eta2 = 0.25, 0.75
@@ -139,31 +133,12 @@ def opt_gbo(
         mu_min, mu_max = 1e-3, 1e6
         k_update  = 10 # only touch μ every k steps
 
-        # Early stopping parameters
-        best_score = -float('inf')
-        no_improve = 0
-        patience = 200  # stop if no improvement in this many steps
-        improve_margin = 1e-4  # minimum improvement to count as progress
-
         for step in range(n_steps):
             optimizer.zero_grad()
-
-            # Score full vector
-            score = model(z_pca)
-
-            # Check for improvement
-            current = score.item()
-            if current > best_score + improve_margin:
-                best_score = current
-                no_improve = 0
-            else:
-                no_improve += 1
-            if no_improve >= patience:
-                logger.info(f"Early stopping at step {step}, no improvement for {patience} steps.")
-                break
+            score = model(z)
 
             # Compute constraint and loss at current z
-            g_norm = torch.norm(z_pca) - R_pca   # signed constraint value
+            g_norm = torch.norm(z) - R   # signed constraint value
             g_plus = torch.clamp(g_norm, min=0.) # violation (≥ 0)
 
             # Augmented Lagrangian
@@ -179,7 +154,7 @@ def opt_gbo(
             # Dual & penalty update
             with torch.no_grad():
                 # Current signed constraint and its violation
-                g_norm = torch.norm(z_pca) - R_pca
+                g_norm = torch.norm(z) - R
                 g_plus = torch.clamp(g_norm, min=0.)
                 violation = g_plus.item()  # scalar ≥ 0
 
@@ -199,14 +174,12 @@ def opt_gbo(
 
         # Get function value
         with torch.no_grad():
-            f_value = model(z_pca).item()
-
-        # Append fixed PCA components
-        z_pca_full = torch.cat([z_pca, z_pca_fixed], dim=1)
-
-        # Convert back to original space
-        X_new = pca.inverse_transform(z_pca_full.detach().cpu().numpy())
+            f_value = model(z).item()
         y_new = np.array(f_value)
+
+        # Combine with fixed components
+        X_new = X_sampled[i].copy()
+        X_new[opt_dims] = z.squeeze(0).detach().cpu().numpy()
 
         # Denormalize input and output if necessary
         if normalize_input:
@@ -237,10 +210,14 @@ def opt_gbo(
     # Sort y descending
     sorted_indices = np.argsort(y_arr, axis=0)[::-1]
     top_indices = sorted_indices[:n_out]
+
+    # Denormalize initial latent variables if necessary
+    if normalize_input:
+        X_sampled = zero_mean_unit_var_denormalization(X_sampled, X_mean, X_std)
     
     # Filter top n_out and filter X_samples accordingly
     latent_arr = latent_arr[top_indices]
-    X_sampled = X_sampled[top_indices]
+    X_sampled = X_sampled[top_indices].astype(np.float32)
 
     # Save the results
     logger.info("Saving results")
@@ -271,6 +248,6 @@ if __name__ == "__main__":
         save_file=args.save_file,
         n_starts=args.n_starts,
         n_out=args.n_out,
-        n_pca_components=args.n_pca_components,
+        n_opt_dims=args.n_opt_dims,
         device=args.device,
     )

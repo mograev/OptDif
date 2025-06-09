@@ -1,11 +1,11 @@
 #!/bin/bash
 
-#SBATCH --job-name=lso_sd35m                # Job name
-#SBATCH --output=logs/lso/gbo/sd35m_%j.out  # Output log file
-#SBATCH --error=logs/lso/gbo/sd35m_%j.err   # Error log file
-#SBATCH --time=30                           # Maximum runtime (hh:mm:ss)
-#SBATCH --partition=gpu20                   # Partition to submit the job to
-#SBATCH --gres=gpu:1                        # Request GPU resources
+#SBATCH --job-name=lso_sd_gbo                   # Job name
+#SBATCH --output=logs/lso/gbo_pca_sd_01_%j.out  # Output log file
+#SBATCH --error=logs/lso/gbo_pca_sd_01_%j.err   # Error log file
+#SBATCH --time=4:00:00                          # Maximum runtime (hh:mm:ss)
+#SBATCH --partition=gpu20                       # Partition to submit the job to
+#SBATCH --gres=gpu:1                            # Request GPU resources
 
 # Device and seed
 device="cuda"
@@ -15,10 +15,10 @@ seed=42
 img_dir="/BS/robust-architectures/work/OptDif/data/ffhq/images1024x1024"
 img_tensor_dir="/BS/robust-architectures/work/OptDif/data/ffhq/pt_images"
 attr_path="/BS/robust-architectures/work/OptDif/data/ffhq/ffhq_smile_scores.json"
-max_property_value=1 #5
+max_property_value=2 #5
 min_property_value=0 #0
-batch_size=16 #128
-num_workers=8 #4
+batch_size=16 #16
+num_workers=8
 val_split=0
 data_device="cuda"
 
@@ -26,23 +26,23 @@ data_device="cuda"
 weight_type="uniform"
 
 # Weighted Retraining
-query_budget=500
+query_budget=50 #500
 retraining_frequency=5
-n_retrain_epochs=0 #0.1
+n_retrain_epochs=0.05 #0.1
 n_init_retrain_epochs=0 #1
-result_path="results/debug_12/"
-sd_vae_path="stabilityai/stable-diffusion-3.5-medium"
+result_path="results/gbo_pca_sd_01/"
+sd_vae_path="models/sd_vae/version_0/huggingface" #"stabilityai/stable-diffusion-3.5-medium"
 predictor_attr_file="models/classifier/celeba_smile/attributes.json"
 predictor_path="models/classifier/celeba_smile/predictor_128_scaled3.pth.tar"
 scaled_predictor=True
 
 # Optimization
-opt_strategy="GBO_PCA" # "GBO", "GP", "DNGO"
-n_out=2 #5
-n_starts=3 #20
-n_rand_points=800  #8000
-n_best_points=200 #2000
-n_pca_components=512
+opt_strategy="GBO_PCA" # "GBO", "GP", "DNGO", "GBO_PCA", "GBO_FI"
+n_out=5 #5
+n_starts=20 #20
+n_rand_points=8000  #8000
+n_best_points=2000 #2000
+n_opt_dims=512
 
 # Initialize Conda for the current shell
 eval "$(conda shell.bash hook)"
@@ -78,5 +78,5 @@ CUDA_VISIBLE_DEVICES=0 python src/lso_sd.py \
     --n_starts $n_starts \
     --n_rand_points $n_rand_points \
     --n_best_points $n_best_points \
-    --n_pca_components $n_pca_components \
+    --n_opt_dims $n_opt_dims \
     "$@"

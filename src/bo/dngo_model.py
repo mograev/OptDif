@@ -20,7 +20,7 @@ import torch.nn as nn
 import torch.optim as optim
 from scipy import optimize
 
-from src.bo.util.normalization import zero_mean_unit_var_normalization, zero_mean_unit_var_denormalization
+from src.utils import zero_mean_unit_var_normalization, zero_mean_unit_var_denormalization
 from src.bo.bayesian_linear_regression import BayesianLinearRegression, Prior
 
 
