@@ -3,42 +3,44 @@
 import os
 import pickle
 from tqdm import tqdm
+from PIL import Image
+import glob
 
 import torch
-from torch.utils.data import DataLoader
+from torchvision import transforms
+from torch.utils.data import DataLoader, Dataset
 
 from diffusers import AutoencoderKL
 
-from src.dataloader.utils import SimpleFilenameToTensorDataset
-
-
 # Configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-input_dir = "data/ffhq/pt_images"
+input_dir = "/BS/robust-architectures/work/OptDif/data/ffhq/images1024x1024"
 output_dir = "data/ffhq/sd_latents"
-batch_size=128
-num_workers=4
+os.makedirs(output_dir, exist_ok=True)
 
 print(f"Working on device: {device}")
 
 # Load the file names to process
-filename_list = os.listdir(input_dir)
-# Ensure it's an tensor file and remove the extension
-filename_list = [filename.split(".")[0] for filename in filename_list if filename.lower().endswith('.pt')]
-# Sort the filenames so that the order is consistent
-filename_list.sort()
+img_paths = glob.glob("/BS/robust-architectures/work/OptDif/data/ffhq/images1024x1024/*.png")
+img_paths.sort()
 
 # Create a DataLoader
-dataset = SimpleFilenameToTensorDataset(
-    filename_list=filename_list,
-    tensor_dir=input_dir,
-)
-dataloader = DataLoader(
-    dataset,
-    batch_size=batch_size,
-    num_workers=num_workers,
-    shuffle=False,
-)
+class ImageFolderDataset(Dataset):
+    def __init__(self, paths, size=(256,256)):
+        self.paths = paths
+        self.tf = transforms.Compose([
+            transforms.Resize(size),
+            transforms.ToTensor(),
+            transforms.ConvertImageDtype(torch.float32),
+        ])
+    def __len__(self):
+        return len(self.paths)
+    def __getitem__(self, idx):
+        img = Image.open(self.paths[idx]).convert("RGB")
+        return self.tf(img)
+
+dataset = ImageFolderDataset(img_paths, size=(256,256))
+loader  = DataLoader(dataset, batch_size=128, num_workers=8, pin_memory=True)
 
 # Load pre-trained SD-VAE model
 sd_vae = AutoencoderKL.from_pretrained("stabilityai/stable-diffusion-3.5-medium", subfolder="vae")
@@ -53,7 +55,7 @@ z_encode = []
 
 # Encode images to SD latents
 with torch.no_grad():
-    for image_tensor_batch in tqdm(dataloader):
+    for image_tensor_batch in tqdm(loader):
         # Move images to the correct device
         images = image_tensor_batch.to(device)
 
@@ -64,12 +66,17 @@ with torch.no_grad():
         for latent in latents:
             z_encode.append(latent.cpu())
 
-
 # Free up GPU memory
 sd_vae = sd_vae.cpu()
 torch.cuda.empty_cache()
 
 # Save the latents to disk
-for filename, latent in zip(filename_list, z_encode):    
+for filepath, latent in zip(img_paths, z_encode):
+    # Derive a base name without extension for saving
+    base = os.path.splitext(os.path.basename(filepath))[0]
     # Save the latent tensor
-    torch.save(latent, os.path.join(output_dir, f"{filename}.pt"), pickle_protocol=pickle.HIGHEST_PROTOCOL)
+    torch.save(latent, os.path.join(output_dir, f"{base}.pt"), pickle_protocol=pickle.HIGHEST_PROTOCOL)
+
+# Save latents as a single file
+latents = torch.stack(z_encode, dim=0)
+torch.save(latents, "data/ffhq/sd_latents.pt", pickle_protocol=pickle.HIGHEST_PROTOCOL)
