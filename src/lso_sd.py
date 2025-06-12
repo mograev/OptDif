@@ -27,7 +27,7 @@ from src.dataloader.weighting import DataWeighter
 from src.classification.smile_classifier import SmileClassifier
 from src.models.lit_vae import LitVAE
 from src.utils import SubmissivePlProgressbar
-from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE, ENTMOOT_TRAIN_OPT_FILE, GBO_PCA_TRAIN_FILE, GBO_PCA_OPT_FILE, GBO_FI_TRAIN_FILE, GBO_FI_OPT_FILE
+from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE, ENTMOOT_TRAIN_OPT_FILE, GBO_PCA_TRAIN_FILE, GBO_PCA_OPT_FILE, GBO_FI_TRAIN_FILE, GBO_FI_OPT_FILE, DNGO_PCA_TRAIN_FILE, BO_PCA_OPT_FILE
 
 
 # Weighted Retraining arguments
@@ -55,17 +55,16 @@ def add_opt_args(parser):
 
     # Common arguments
     opt_group = parser.add_argument_group("Optimization")
-    opt_group.add_argument("--opt_strategy", type=str, choices=["GBO", "DNGO", "GP", "GBO_PCA", "GBO_FI"], help="Optimization strategy to use")
-    opt_group.add_argument("--n_out", type=int, default=5, help="Number of points to return from optimization")
+    opt_group.add_argument("--opt_strategy", type=str, choices=["GBO", "DNGO", "DNGO_PCA", "GP", "GBO_PCA", "GBO_FI"], help="Optimization strategy to use")
     opt_group.add_argument("--n_starts", type=int, default=20, help="Number of optimization runs with different initial values")
     opt_group.add_argument("--n_rand_points", type=int, default=8000, help="Number of random points to sample for surrogate model training")
     opt_group.add_argument("--n_best_points", type=int, default=2000, help="Number of best points to sample for surrogate model training")
-    opt_group.add_argument("--n_opt_dims", type=int, default=1024, help="Number of (PCA or FI) dimensions to use for GBO")
+    opt_group.add_argument("--n_opt_dims", type=int, default=1024, help="Number of (PCA or FI) dimensions to use")
+    opt_group.add_argument("--sample_distribution", type=str, default="normal", choices=["normal", "uniform", "train_data"], help="Distribution to sample from: 'normal', 'uniform' or 'train_data'")
 
     # BO arguments (used for both DNGO and GP)
     bo_group = parser.add_argument_group("BO")
     bo_group.add_argument("--n_samples", type=int, default=10000, help="Number of samples to draw from sample distribution")
-    bo_group.add_argument("--sample_distribution", type=str, default="normal", help="Distribution to sample from: 'normal' or 'uniform'")
     bo_group.add_argument("--opt_method", type=str, default="SLSQP", choices=["SLSQP", "COBYLA", "L-BFGS-B"], help="Optimization method to use: 'SLSQP', 'COBYLA' 'L-BFGS-B'")
     bo_group.add_argument("--opt_constraint_threshold", type=float, default=None, help="Log-density threshold for optimization constraint")
     bo_group.add_argument("--opt_constraint_strategy", type=str, default="gmm_fit", help="Strategy for optimization constraint: only 'gmm_fit' is implemented")
@@ -113,7 +112,7 @@ def _retrain_vae(vae, datamodule, save_dir, version_str, num_epochs, device):
     tb_logger = pl.loggers.TensorBoardLogger(
         save_dir=save_dir, version=version_str, name=""
     )
-    checkpointer = pl.callbacks.ModelCheckpoint(save_last=True, monitor="val/total_loss")
+    checkpointer = pl.callbacks.ModelCheckpoint(save_last=True)
 
     # Wrap the VAE in a Lightning module
     vae_module = LitVAE(model=vae)
@@ -135,7 +134,6 @@ def _retrain_vae(vae, datamodule, save_dir, version_str, num_epochs, device):
             accelerator="gpu" if device == "cuda" else "cpu",
             max_epochs=max_epochs,
             limit_train_batches=limit_train_batches,
-            log_every_n_steps=10,
             limit_val_batches=0.0,
             logger=tb_logger,
             callbacks=[checkpointer],
@@ -144,8 +142,6 @@ def _retrain_vae(vae, datamodule, save_dir, version_str, num_epochs, device):
 
         # Fit model
         trainer.fit(vae_module, datamodule=datamodule)
-
-    logger.debug(f"VAE retraining finished.")
 
 
 def _choose_best_rand_points(args, dataset):
@@ -275,18 +271,16 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
     logger.debug(f"Latent points shape: {latent_points.shape}")
 
     # Save points to file
-    if args.opt_strategy in ["GP", "DNGO"]:
+    if args.opt_strategy in ["GP", "DNGO", "DNGO_PCA"]:
         targets = -targets.reshape(-1, 1)  # Since it is a minimization problem
-    elif args.opt_strategy == "GBO":
+    else:
         targets = targets.reshape(-1, 1)
 
     # Save the file
     np.savez_compressed(
         data_file,
         X_train=latent_points.astype(np.float64),
-        X_test=[],
         y_train=targets.astype(np.float64),
-        y_test=[],
     )
 
     # Save old progress bar description
@@ -297,7 +291,7 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
 
     # -- Optimization based on strategy --------------------------- #
 
-    if args.opt_strategy in ["GP", "DNGO"]:
+    if args.opt_strategy in ["GP", "DNGO", "DNGO_PCA"]:
 
         # -- 1. Fit surrogate model ------------------------------- #
 
@@ -339,18 +333,35 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
 
             _run_command(dngo_train_command, f"DNGO train")
 
+        elif args.opt_strategy == "DNGO_PCA":
+
+            dngo_train_command = [
+                "python",
+                DNGO_PCA_TRAIN_FILE,
+                f"--seed={iter_seed}",
+                f"--data_file={str(data_file)}",
+                f"--save_file={str(new_bo_file)}",
+                f"--logfile={str(log_path)}",
+                f"--n_pca_components={args.n_opt_dims}",
+            ]
+
+            if pbar is not None:
+                pbar.set_description("DNGO initial fit")
+
+            _run_command(dngo_train_command, f"DNGO train")
+
         curr_bo_file = new_bo_file
 
         # -- 2. Optimize surrogate acquisition function ----------- #
         
-        opt_path = run_folder / f"bo_opt_res.npy"
+        opt_path = run_folder / f"bo_opt_res.npz"
         log_path = run_folder / f"bo_opt.log"
 
-        dngo_opt_command = [
+        bo_opt_command = [
             "python",
-            BO_OPT_FILE,
+            BO_PCA_OPT_FILE if args.opt_strategy == "DNGO_PCA" else BO_OPT_FILE,
             f"--seed={iter_seed}",
-            f"--surrogate_type={args.bo_surrogate}",
+            f"--surrogate_type={"DNGO" if args.opt_strategy in ["DNGO", "DNGO_PCA"] else "GP"}",
             f"--surrogate_file={str(curr_bo_file)}",
             f"--data_file={str(data_file)}",
             f"--save_file={str(opt_path)}",
@@ -364,13 +375,16 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
         ]
 
         if args.opt_constraint_threshold is not None:
-            dngo_opt_command.append(f"--opt_constraint_threshold={args.opt_constraint_threshold}")
-            dngo_opt_command.append(f"--opt_constraint_strategy={args.opt_constraint_strategy}")
-            dngo_opt_command.append(f"--n_gmm_components={args.n_gmm_components}")
+            bo_opt_command.append(f"--opt_constraint_threshold={args.opt_constraint_threshold}")
+            bo_opt_command.append(f"--opt_constraint_strategy={args.opt_constraint_strategy}")
+            bo_opt_command.append(f"--n_gmm_components={args.n_gmm_components}")
+
+        if args.opt_strategy == "DNGO_PCA":
+            bo_opt_command.append(f"--n_pca_components={args.n_opt_dims}")
 
         if pbar is not None:
             pbar.set_description("optimizing acq func")
-        _run_command(dngo_opt_command, f"Surrogate opt")
+        _run_command(bo_opt_command, f"Surrogate opt")
 
     elif args.opt_strategy in ["GBO", "GBO_PCA", "GBO_FI"]:
 
@@ -432,11 +446,12 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
                 GBO_OPT_FILE,
                 f"--seed={iter_seed}",
                 f"--model_file={str(curr_gbo_file)}",
-                f"--data_file={str(data_file)}",
                 f"--save_file={str(opt_path)}",
+                f"--data_file={str(data_file)}",
                 f"--logfile={str(log_path)}",
                 f"--n_starts={args.n_starts}",
                 f"--n_out={str(num_queries_to_do)}",
+                f"--sample_distribution={args.sample_distribution}",
             ]
         elif args.opt_strategy == "GBO_PCA":
             gbo_opt_command = [
@@ -510,6 +525,7 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
     )
 
     # Decode initial points if available
+    x_new_init = None
     if z_init is not None:
         x_new_init, _ = _decode_and_predict(
             sd_vae,
@@ -661,6 +677,7 @@ def main_loop(args):
                 x_new, y_new, z_query, x_new_init = lso_results
             else:
                 x_new, y_new, z_query = lso_results
+                x_new_init = None
 
             # Create a new directory for the sampled data
             curr_samples_dir = Path(samples_dir) / f"iter_{samples_so_far}"

@@ -25,9 +25,9 @@ from src.dataloader.ffhq import FFHQWeightedDataset
 from src.dataloader.utils import SimpleFilenameToTensorDataset
 from src.dataloader.weighting import DataWeighter
 from src.classification.smile_classifier import SmileClassifier
-from src.models.latent_models import LatentVAE, LatentVQVAE
+from src.models.latent_models import LatentVQVAE
 from src.utils import SubmissivePlProgressbar
-from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE, ENTMOOT_TRAIN_OPT_FILE
+from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE, ENTMOOT_TRAIN_OPT_FILE, GBO_FI_TRAIN_FILE, GBO_FI_OPT_FILE
 
 
 # Weighted Retraining arguments
@@ -57,11 +57,12 @@ def add_opt_args(parser):
 
     # Common arguments
     opt_group = parser.add_argument_group("Optimization")
-    opt_group.add_argument("--opt_strategy", type=str, choices=["GBO", "DNGO", "GP", "ENTMOOT"], help="Optimization strategy to use")
+    opt_group.add_argument("--opt_strategy", type=str, choices=["GBO", "DNGO", "GP", "ENTMOOT", "GBO_PCA", "GBO_FI"], help="Optimization strategy to use")
     opt_group.add_argument("--n_out", type=int, default=5, help="Number of points to return from optimization")
     opt_group.add_argument("--n_starts", type=int, default=20, help="Number of optimization runs with different initial values")
     opt_group.add_argument("--n_rand_points", type=int, default=8000, help="Number of random points to sample for surrogate model training")
     opt_group.add_argument("--n_best_points", type=int, default=2000, help="Number of best points to sample for surrogate model training")
+    opt_group.add_argument("--n_opt_dims", type=int, default=512, help="Number of (PCA or FI) dimensions to use for GBO")
 
     # BO arguments (used for both DNGO and GP)
     bo_group = parser.add_argument_group("BO")
@@ -109,13 +110,12 @@ def _retrain_latent_model(latent_model, datamodule, save_dir, version_str, num_e
 
     # Make sure logs don't get in the way of progress bars
     pl._logger.setLevel(logging.CRITICAL)
-    train_pbar = SubmissivePlProgressbar(process_position=1)
 
     # Create custom saver and logger
     tb_logger = pl.loggers.TensorBoardLogger(
         save_dir=save_dir, version=version_str, name=""
     )
-    checkpointer = pl.callbacks.ModelCheckpoint(save_last=True, monitor="val/total_loss")
+    checkpointer = pl.callbacks.ModelCheckpoint(save_last=True)
 
     # Handle fractional epochs
     if num_epochs < 1:
@@ -134,13 +134,14 @@ def _retrain_latent_model(latent_model, datamodule, save_dir, version_str, num_e
             accelerator="gpu" if device == "cuda" else "cpu",
             max_epochs=max_epochs,
             limit_train_batches=limit_train_batches,
-            limit_val_batches=1,
+            limit_val_batches=0.0,
             logger=tb_logger,
-            callbacks=[train_pbar, checkpointer],
+            callbacks=[checkpointer],
+            enable_progress_bar=False,
         )
 
         # Fit model
-        trainer.fit(latent_model, datamodule)
+        trainer.fit(latent_model, datamodule=datamodule)
 
 
 def _choose_best_rand_points(args, dataset):
@@ -194,7 +195,7 @@ def _encode_images(sd_vae, dataloader, device):
 
     return z_encode
 
-def _encode_latents(latent_model, dataloader, device):
+def _encode_latents(latent_model, dataloader, opt_strategy, device):
     """ Helper function to encode SD latents into lower-dimensional latent space """
     zz_encode = []
 
@@ -207,12 +208,11 @@ def _encode_latents(latent_model, dataloader, device):
             sd_latents = sd_tensor_batch.to(device)
             
             # Encode sd latents into lower dim latent space
-            if isinstance(latent_model, LatentVAE):
-                # For LatentVAE, sample from the latent distribution
-                latents = latent_model.encode(sd_latents).sample()
-            elif isinstance(latent_model, LatentVQVAE):
-                # For LatentVQVAE, get the indices of the quantized latents
+            if opt_strategy == "ENTMOOT":
+                # Get discrete indices for ENTMOOT
                 latents = latent_model.encode(sd_latents)[2]
+            else:
+                latents = latent_model.encode(sd_latents)[0]
 
             zz_encode.append(latents.cpu().numpy())
 
@@ -226,7 +226,7 @@ def _encode_latents(latent_model, dataloader, device):
     return zz_encode
 
 
-def _decode_and_predict(latent_model, sd_vae, predictor, z, device):
+def _decode_and_predict(latent_model, sd_vae, predictor, z, opt_strategy, device):
     """ Helper function to decode VAE latent vectors and calculate their properties """
     # Decode all points in a fixed decoding radius
     decoded_images = []
@@ -243,7 +243,11 @@ def _decode_and_predict(latent_model, sd_vae, predictor, z, device):
             latents = z[j: j + batch_size].to(device)
 
             # Decode latent vectors to SD latents
-            sd_lats = latent_model.decode_code(latents)
+            if opt_strategy == "ENTMOOT":
+                # Decode discrete indices for ENTMOOT
+                sd_lats = latent_model.decode_code(latents)
+            else:
+                sd_lats = latent_model.decode(latents)
 
             # Decode SD latents to images
             dec_imgs = sd_vae.decode(sd_lats).sample
@@ -297,22 +301,20 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
     )
 
     # Encode the data to the lower-dimensional latent space
-    latent_points = _encode_latents(latent_model, temp_dataloader, args.device)
+    latent_points = _encode_latents(latent_model, temp_dataloader, args.opt_strategy, args.device)
     logger.debug(f"Latent points shape: {latent_points.shape}")
 
     # Save points to file
     if args.opt_strategy in ["GP", "DNGO", "ENTMOOT"]:
         targets = -targets.reshape(-1, 1)  # Since it is a minimization problem
-    elif args.opt_strategy == "GBO":
+    else:
         targets = targets.reshape(-1, 1)
 
     # Save the file
     np.savez_compressed(
         data_file,
         X_train=latent_points.astype(np.float64),
-        X_test=[],
         y_train=targets.astype(np.float64),
-        y_test=[],
     )
 
     # Save old progress bar description
@@ -398,23 +400,36 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
             pbar.set_description("optimizing acq func")
         _run_command(dngo_opt_command, f"Surrogate opt")
 
-    elif args.opt_strategy == "GBO":
+    elif args.opt_strategy in ["GBO", "GBO_FI"]:
 
         # -- 1. Fit surrogate model ------------------------------- #
 
         new_gbo_file = run_folder / f"gbo_train_res.npz"
         log_path = run_folder / f"gbo_train.log"
 
-        gbo_train_command = [
-            "python",
-            GBO_TRAIN_FILE,
-            f"--seed={iter_seed}",
-            f"--data_file={str(data_file)}",
-            f"--save_file={str(new_gbo_file)}",
-            f"--logfile={str(log_path)}",
-            f"--device={args.device}",
-            "--normalize_input",
-        ]
+        if args.opt_strategy == "GBO":
+            gbo_train_command = [
+                "python",
+                GBO_TRAIN_FILE,
+                f"--seed={iter_seed}",
+                f"--data_file={str(data_file)}",
+                f"--save_file={str(new_gbo_file)}",
+                f"--logfile={str(log_path)}",
+                f"--device={args.device}",
+                f"--normalize_input",
+            ]
+        elif args.opt_strategy == "GBO_FI":
+            gbo_train_command = [
+                "python",
+                GBO_FI_TRAIN_FILE,
+                f"--seed={iter_seed}",
+                f"--data_file={str(data_file)}",
+                f"--save_file={str(new_gbo_file)}",
+                f"--logfile={str(log_path)}",
+                f"--device={args.device}",
+                f"--normalize_input",
+                f"--n_opt_dims={args.n_opt_dims}",
+            ]
 
         if pbar is not None:
             pbar.set_description("GBO initial fit")
@@ -425,19 +440,34 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
 
         # -- 2. Optimize surrogate acquisition function ----------- #
 
-        opt_path = run_folder / f"gbo_opt_res.npy"
+        opt_path = run_folder / f"gbo_opt_res.npz"
         log_path = run_folder / f"gbo_opt.log"
 
-        gbo_opt_command = [
-            "python",
-            GBO_OPT_FILE,
-            f"--seed={iter_seed}",
-            f"--model_file={str(curr_gbo_file)}",
-            f"--save_file={str(opt_path)}",
-            f"--logfile={str(log_path)}",
-            f"--n_starts={args.n_starts}",
-            f"--n_out={str(num_queries_to_do)}",
-        ]
+        if args.opt_strategy == "GBO":
+            gbo_opt_command = [
+                "python",
+                GBO_OPT_FILE,
+                f"--seed={iter_seed}",
+                f"--model_file={str(curr_gbo_file)}",
+                f"--data_file={str(data_file)}",
+                f"--save_file={str(opt_path)}",
+                f"--logfile={str(log_path)}",
+                f"--n_starts={args.n_starts}",
+                f"--n_out={str(num_queries_to_do)}",
+            ]
+        elif args.opt_strategy == "GBO_FI":
+            gbo_opt_command = [
+                "python",
+                GBO_FI_OPT_FILE,
+                f"--seed={iter_seed}",
+                f"--model_file={str(curr_gbo_file)}",
+                f"--data_file={str(data_file)}",
+                f"--save_file={str(opt_path)}",
+                f"--logfile={str(log_path)}",
+                f"--n_starts={args.n_starts}",
+                f"--n_out={str(num_queries_to_do)}",
+                f"--n_opt_dims={args.n_opt_dims}",
+            ]
 
         if pbar is not None:
             pbar.set_description("gradient-based optimization")
@@ -473,16 +503,29 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
        _run_command(entmoot_train_opt_command, f"ENTMOOT train and opt")
 
     # Load point
-    z_opt = np.load(opt_path)
-    
+    results = np.load(opt_path, allow_pickle=True)
+    z_opt = results["z_opt"]
+    z_init = results.get("z_init", None)
+
     # Decode point
     x_new, y_new, sd_opt = _decode_and_predict(
         latent_model,
         sd_vae,
         predictor,
         torch.as_tensor(z_opt, device=device),
+        args.opt_strategy,
         device
     )
+
+    if z_init is not None:
+        x_new_init, _, _ = _decode_and_predict(
+            latent_model,
+            sd_vae,
+            predictor,
+            torch.as_tensor(z_init, device=device),
+            args.opt_strategy,
+            device
+        )
 
     # Reset pbar description
     if pbar is not None:
@@ -493,8 +536,11 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
             postfix["best"] = max(postfix["best"], float(max(y_new)))
             pbar.set_postfix(postfix)
 
-    # Update datamodule with ALL data points
-    return x_new, y_new, z_opt, sd_opt
+    # Update data points
+    if x_new_init is not None:
+        return (x_new, y_new, z_opt, sd_opt, x_new_init)
+    else:
+        return x_new, y_new, z_opt, sd_opt
 
 
 def main_loop(args):
@@ -511,7 +557,7 @@ def main_loop(args):
     data_dir.mkdir()
     sd_latent_dir = data_dir / "sd_latents"
     sd_latent_dir.mkdir()
-    sd_latent_dir = "/pfs/work9/workspace/scratch/ma_mgraevin-optdif/results/temp_latents/"
+    sd_latent_dir = "/scratch/inf0/user/mgraeving/OptDif/results/temp_latents"
     samples_dir = data_dir / "samples"
     samples_dir.mkdir()
 
@@ -541,6 +587,7 @@ def main_loop(args):
         ddconfig=latent_model_config["ddconfig"],
         lossconfig=latent_model_config["lossconfig"],
         ckpt_path=args.latent_model_ckpt_path,
+        sd_vae_path=args.sd_vae_path,
     )
 
     # Load pretrained (temperature-scaled) predictor
@@ -628,7 +675,7 @@ def main_loop(args):
             opt_data_file = opt_dir / "data.npz"
 
             # Perform latent optimization
-            x_new, y_new, z_query, sd_query = latent_optimization(
+            lso_results = latent_optimization(
                 args,
                 latent_model,
                 sd_vae,
@@ -641,6 +688,12 @@ def main_loop(args):
                 pbar=pbar,
                 postfix=postfix,
             )
+
+            if len(lso_results) == 5:
+                x_new, y_new, z_query, sd_query, x_new_init = lso_results
+            else:
+                x_new, y_new, z_query, sd_query = lso_results
+                x_new_init = None
 
             # Create a new directory for the sampled data
             curr_samples_dir = Path(samples_dir) / f"iter_{samples_so_far}"
@@ -668,6 +721,14 @@ def main_loop(args):
                 if not isinstance(x, torch.Tensor):
                     x = torch.from_numpy(x)
                 torch.save(x, str(Path(curr_samples_dir) / f"img_tensor/tensor_{i}.pt"), pickle_protocol=pickle.HIGHEST_PROTOCOL)
+
+            # Save initial points if available
+            if x_new_init is not None:
+                os.makedirs(curr_samples_dir / "img_tensor_init")
+                for i, x in enumerate(x_new_init):
+                    if not isinstance(x, torch.Tensor):
+                        x = torch.from_numpy(x)
+                    torch.save(x, str(Path(curr_samples_dir) / f"img_tensor_init/tensor_{i}.pt"), pickle_protocol=pickle.HIGHEST_PROTOCOL)
 
             # Append new points to dataset and adapt weighting
             datamodule.append_train_data(new_filename_list, y_new)

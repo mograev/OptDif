@@ -481,13 +481,14 @@ def opt_main(args):
     logger.info(list(mu.ravel()))
     logger.info("var at points:")
     logger.info(list(var.ravel()))
-    
-    logger.info("\n\nEND OF SCRIPT!")
 
-    # Reshape to original data shape (B, 8, 8, 8)
-    latent_pred = latent_pred.reshape(latent_pred.shape[0], 8, 8, 8)
     # Save results
-    np.save(args.save_file, latent_pred)
+    np.savez_compressed(
+        args.save_file,
+        z_opt=latent_pred
+    )
+    
+    logger.info("\nEnd of Script.")
 
     return latent_pred
 

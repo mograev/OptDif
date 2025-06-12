@@ -12,7 +12,7 @@ import numpy as np
 import torch
 
 from src.gbo.gbo_model import GBOModel
-from src.utils import zero_mean_unit_var_denormalization
+from src.utils import zero_mean_unit_var_normalization, zero_mean_unit_var_denormalization
 
 # Arguments
 parser = argparse.ArgumentParser()
@@ -21,8 +21,10 @@ gbo_opt_group.add_argument("--logfile", type=str, help="file to log to", default
 gbo_opt_group.add_argument("--seed", type=int, required=True)
 gbo_opt_group.add_argument("--model_file", type=str, help="file to load model from", required=True)
 gbo_opt_group.add_argument("--save_file", type=str, required=True, help="path to save results to")
+gbo_opt_group.add_argument("--data_file", type=str, help="file to load data from", default=None)
 gbo_opt_group.add_argument("--n_starts", type=int, default=1, help="number of random starts")
 gbo_opt_group.add_argument("--n_out", type=int, default=1, help="number of outputs")
+gbo_opt_group.add_argument("--sample_distribution", type=str, default="normal", help="distribution to sample from (normal, uniform or train data)")
 gbo_opt_group.add_argument("--device", type=str, default="cpu", help="device to use for training (cpu or cuda)")
 
 
@@ -55,8 +57,10 @@ def opt_gbo(
     logfile,
     model_file,
     save_file,
+    data_file=None,
     n_starts=1,
     n_out=1,
+    sample_distribution="normal",
     device="cpu",
 ):
     
@@ -81,8 +85,45 @@ def opt_gbo(
     model.load_state_dict(ckpt['model_state_dict'])
     model.eval()
 
-    # Generate latent grid of samples
-    latent_grid = torch.randn(n_starts, ckpt['input_dim']) 
+    if sample_distribution == "train_data":
+        logger.info("Sampling from training data distribution")
+        if data_file is None:
+            raise ValueError("data_file must be provided when sample_distribution is 'train_data'")
+        
+        # Load the data
+        with np.load(data_file, allow_pickle=True) as npz:
+            X_train = npz['X_train'].astype(np.float32)
+        logger.info(f"X_train shape: {X_train.shape}")
+
+        # Normalize inputs
+        if normalize_input:
+            logger.info("Normalizing input data")
+            X_train = zero_mean_unit_var_normalization(X_train, X_mean, X_std)
+            logger.debug(f"X_train stats after normalization: mean {X_train.mean()}, std {X_train.std()}, min {X_train.min()}, max {X_train.max()}")
+
+        # Sample from training data
+        indices = np.random.choice(X_train.shape[0], size=n_starts)
+        latent_grid = torch.tensor(X_train[indices], device=device, dtype=torch.float32)
+
+    elif sample_distribution == "uniform":
+        logger.info("Sampling from uniform distribution")
+
+        # Generate latent grid of samples
+        latent_grid = torch.rand(n_starts, ckpt['input_dim'], device=device)
+
+    elif sample_distribution == "normal":
+        logger.info("Sampling from normal distribution")
+
+        # Generate latent grid of samples
+        latent_grid = torch.randn(n_starts, ckpt['input_dim']) 
+
+    else:
+        raise ValueError(f"Unknown sample_distribution: {sample_distribution}")
+    
+    # Store initial latent grid for visualization
+    latent_grid_init = latent_grid.clone().numpy()
+    if normalize_input:
+        latent_grid_init = zero_mean_unit_var_denormalization(latent_grid_init, X_mean, X_std)
 
     # Run optimization
     logger.info("\n### STARTING OPTIMIZATION ###\n")
@@ -98,7 +139,7 @@ def opt_gbo(
 
         # Optimizer setup
         optimizer = torch.optim.Adam([z], lr=1e-3)
-        n_steps = 1000
+        n_steps = 3000
 
         # Adaptive ALM setup
         R = z.shape[1] ** 0.5
@@ -186,15 +227,24 @@ def opt_gbo(
     y_arr = np.vstack(list_y)
 
     # Sort y descending
-    sorted_indices = np.argsort(y_arr, axis=0)[::-1]
+    sorted_indices = np.argsort(y_arr, axis=0).flatten()[::-1]
     top_indices = sorted_indices[:n_out]
-    
+
     # Filter top n_out
     latent_arr = latent_arr[top_indices]
+    latent_grid_init = latent_grid_init[top_indices]
+
+    # Ensure the output is float32
+    latent_arr = latent_arr.astype(np.float32)
+    latent_grid_init = latent_grid_init.astype(np.float32)
 
     # Save the results
     logger.info("Saving results")
-    np.save(save_file, latent_arr)
+    np.savez_compressed(
+        save_file,
+        z_opt=latent_arr,
+        z_init=latent_grid_init,
+    )
     logger.info(f"Successful end of script")
 
     # Clean up GPU
@@ -214,7 +264,9 @@ if __name__ == "__main__":
         logfile=args.logfile,
         model_file=args.model_file,
         save_file=args.save_file,
+        data_file=args.data_file,
         n_starts=args.n_starts,
         n_out=args.n_out,
+        sample_distribution=args.sample_distribution,
         device=args.device,
     )
