@@ -8,7 +8,7 @@ from torchvision import transforms
 
 from src.dataloader.ffhq import FFHQWeightedDataset
 from src.dataloader.weighting import DataWeighter
-from src.models.latent_models import LatentVAE, LatentVQVAE, LatentAutoencoder, LatentLinearAE
+from src.models.latent_models import LatentVAE, LatentVQVAE, LatentVQVAE2, LatentAutoencoder, LatentLinearAE
 from src.metrics.fid import FIDScore
 from src.metrics.spectral import SpectralScore
 from src.dataloader.utils import MultiModeDataset
@@ -33,7 +33,7 @@ if __name__ == "__main__":
     parser = DataWeighter.add_weight_args(parser)
 
     # Direct arguments
-    parser.add_argument("--model_type", type=str, choices=["LatentVAE", "LatentVQVAE", "LatentAutoencoder", "LatentLinearAE"], help="Type of latent model to use")
+    parser.add_argument("--model_type", type=str, choices=["LatentVAE", "LatentVQVAE", "LatentVQVAE2", "LatentAutoencoder", "LatentLinearAE"], help="Type of latent model to use")
     parser.add_argument("--model_version", type=str, help="Version of the latent model to use")
     parser.add_argument("--model_config_path", type=str, help="Path to the model config file")
     parser.add_argument("--model_output_dir", type=str, help="Directory to save the model")
@@ -88,6 +88,7 @@ if __name__ == "__main__":
     model_cls = {
         "LatentVAE": LatentVAE,
         "LatentVQVAE": LatentVQVAE,
+        "LatentVQVAE2": LatentVQVAE2,
         "LatentAutoencoder": LatentAutoencoder,
         "LatentLinearAE": LatentLinearAE,
     }[args.model_type]

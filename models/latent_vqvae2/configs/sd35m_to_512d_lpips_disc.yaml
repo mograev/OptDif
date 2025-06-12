@@ -1,0 +1,53 @@
+ddconfig:
+  # Bottom level  (identical to old VQVAE)
+  bottom:
+    double_z: false
+    z_channels: 8           # C  (latent depth)
+    resolution: 32          # H×W of *input* latents
+    in_channels: 16
+    out_ch: 16
+    ch: 64
+    ch_mult: [1, 2, 2]      # 32 -> 16 -> 8
+    num_res_blocks: 2
+    attn_resolutions: []
+    dropout: 0.0
+    attn_type: "none"
+    n_embed: 2048
+    embed_dim: 64           # 8x8 grid
+    remap: null
+    sane_index_shape: true
+
+  # Top level  (operates on 8 × 8 features, downsamples once -> 4×4)
+  top:
+    double_z: false
+    z_channels: 8           # keep depth the same for simplicity
+    resolution: 8           # this must match bottom bottleneck (H_b = 8)
+    in_channels: 8          # = bottom.z_channels
+    out_ch: 8
+    ch: 64
+    ch_mult: [1, 2]         # 8 -> 4
+    num_res_blocks: 2
+    attn_resolutions: []
+    dropout: 0.0
+    attn_type: "none"
+    n_embed: 1024           # usually smaller than bottom
+    embed_dim: 16           # 4x4 grid
+    remap: null
+    sane_index_shape: true
+
+lossconfig:
+    target: "src.models.modules.losses.VQLPIPSWithDiscriminator"
+    params:
+        disc_start: 20000
+        rec_img_weight: 1.0
+        rec_lat_weight: 1.0
+        perceptual_weight: 1.0
+        codebook_weight: 1.0
+        disc_weight: 0.5
+        disc_num_layers: 3
+        disc_in_channels: 3
+        use_actnorm: false
+        disc_loss: "hinge_r1"
+        pixel_loss: "l1"
+        n_embed: 2048
+learning_rate: 1.0e-4

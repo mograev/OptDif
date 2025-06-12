@@ -5,7 +5,7 @@ import torch.distributed as dist
 import pytorch_lightning as pl
 from torchvision.utils import make_grid
 
-# Import Stable Diffusion VAE decoder for optional pixel-space losses
+# Import Stable Diffusion VAE decoder for pixel-space losses
 from diffusers import AutoencoderKL
 
 from src.models.modules.autoencoder import Encoder, Decoder
@@ -264,7 +264,6 @@ class LatentModel(pl.LightningModule, ABC):
             self._val_recons_img = []
 
         super().on_validation_epoch_end()
-
 
 
 class LatentVAE(LatentModel):
@@ -960,6 +959,304 @@ class LatentVQVAE(LatentModel):
                 self.parameters(), 
                 lr=self.learning_rate
             )
+
+
+class LatentVQVAE2(LatentModel):
+    """
+    Hierarchical two-level VQ-VAE-2 that operates directly in the Stable-Diffusion
+    latent space.  A top-level code captures global structure, while a bottom-level
+    code refines fine detail, mirroring the original VQ-VAE-2 design.
+    Expect `ddconfig` to contain two nested dicts: `bottom` and `top`.
+    """
+    def __init__(
+            self,
+            ddconfig,
+            lossconfig,
+            learning_rate: float = 1e-4,
+            sd_vae_path: str | None = None,
+            ckpt_path: str | None = None,
+            ignore_keys: list = [],
+            fid_instance=None,
+            spectral_instance=None,
+        ):
+        """
+        LatentVQVAE2 to process latents instead of images.
+        Args:
+            ddconfig: Configuration for the encoder and decoder.
+            lossconfig: Configuration for the loss function.
+            learning_rate: Learning rate for the optimizer.
+            sd_vae_path: Path to the Stable Diffusion VAE model for perceptual loss.
+            ckpt_path: Path to a checkpoint to load weights from.
+            ignore_keys: Keys to ignore when loading weights from the checkpoint.
+            fid_instance: Instance of the FID metric for evaluation.
+            spectral_instance: Instance of the Spectral metric for evaluation.
+        """
+        super().__init__(
+            ddconfig=ddconfig,
+            lossconfig=lossconfig,
+            learning_rate=learning_rate,
+            sd_vae_path=sd_vae_path,
+            fid_instance=fid_instance,
+            spectral_instance=spectral_instance,
+        )
+        assert "bottom" in ddconfig and "top" in ddconfig, (
+            "For VQ-VAE-2, `ddconfig` must have `bottom` and `top` keys."
+        )
+        bottom_cfg = ddconfig["bottom"]
+        top_cfg    = ddconfig["top"]
+
+        # -- Encoders & Decoders ---------------------------------- #
+        self.encoder_bottom = Encoder(**bottom_cfg)
+        self.encoder_top    = Encoder(**top_cfg)
+
+        self.decoder_top    = Decoder(**top_cfg)     # Upsamples top code to bottom res.
+        self.decoder_bottom = Decoder(**bottom_cfg)  # Final reconstruction
+
+        # -- Vector‑Quantizers ------------------------------------ #
+        # Top level
+        self.quant_conv_top = torch.nn.Conv2d(top_cfg["z_channels"], top_cfg["z_channels"], 1)
+        self.quantize_top   = VectorQuantizer(top_cfg["n_embed"], top_cfg["z_channels"], beta=0.05,
+                                                remap=top_cfg["remap"], sane_index_shape=top_cfg["sane_index_shape"])
+        self.post_quant_conv_top = torch.nn.Conv2d(top_cfg["z_channels"], top_cfg["z_channels"], 1)
+
+        # Bottom level
+        self.quant_conv_bottom = torch.nn.Conv2d(bottom_cfg["z_channels"], bottom_cfg["z_channels"], 1)
+        self.quantize_bottom   = VectorQuantizer(bottom_cfg["n_embed"], bottom_cfg["z_channels"], beta=0.05,
+                                                  remap=bottom_cfg["remap"], sane_index_shape=bottom_cfg["sane_index_shape"])
+        self.post_quant_conv_bottom = torch.nn.Conv2d(bottom_cfg["z_channels"], bottom_cfg["z_channels"], 1)
+
+        # Optionally restore weights
+        if ckpt_path is not None:
+            self.init_from_ckpt(ckpt_path, ignore_keys=ignore_keys)
+
+    def encode(self, x):
+        """
+        Encode an input tensor to produce top and bottom codes.
+        Args:
+            x (torch.Tensor): Input tensor of shape (B, C, H, W).
+        Returns:
+            tuple: Quantized bottom code, quantized top code, total embedding loss,
+                   and concatenated indices for both codes.
+        """
+        # Bottom-level features
+        h_b = self.encoder_bottom(x)                # (B, C_b, H_b, W_b)
+
+        # Top-level features
+        h_t = self.encoder_top(h_b)                 # (B, C_t, H_t, W_t)
+        h_t = self.quant_conv_top(h_t)
+        q_t, diff_t, (_, _, ind_t) = self.quantize_top(h_t)  # (B, C_t, H_t, W_t)
+
+        # Decode top code back to bottom resolution (conditioning)
+        d_t = self.decoder_top(self.post_quant_conv_top(q_t))
+
+        # Residual connection as in original paper
+        h_b = self.quant_conv_bottom(h_b + d_t)
+        q_b, diff_b, (_, _, ind_b) = self.quantize_bottom(h_b)  # (B, C_b, H_b, W_b)
+
+        diff_total = diff_t + diff_b
+        # Flatten & concatenate indices for logging/usage
+        ind = torch.cat(
+            [ind_t.view(ind_t.size(0), -1),
+             ind_b.view(ind_b.size(0), -1)],
+            dim=1
+        )
+        return q_b, q_t, diff_total, ind
+
+    def decode(self, q_b, q_t):
+        """
+        Decode the quantized bottom and top codes to reconstruct the original input.
+        Args:
+            q_b (torch.Tensor): Quantized bottom code of shape (B, C_b, H_b, W_b).
+            q_t (torch.Tensor): Quantized top code of shape (B, C_t, H_t, W_t).
+        Returns:
+            torch.Tensor: Reconstructed tensor of shape (B, C, H, W).
+        """
+        d_t = self.decoder_top(self.post_quant_conv_top(q_t))
+        x   = self.decoder_bottom(self.post_quant_conv_bottom(q_b) + d_t)
+        return x
+    
+    def decode_code(self, code_b, code_t):
+        """
+        Decode a tensor of indices to a higher dimensional representation.
+        Args:
+            code_b (torch.Tensor): Tensor containing bottom indices of shape (B, embed_dim).
+            code_t (torch.Tensor): Tensor containing top indices of shape (B, embed_dim).
+        Returns:
+            torch.Tensor: Reconstructed tensor of shape (B, C, H, W).
+        """
+        if code_b.dim() == 1:
+            # If code_b is a single vector, reshape it to (1, embed_dim)
+            code_b = code_b.unsqueeze(0)
+        if code_t.dim() == 1:
+            # If code_t is a single vector, reshape it to (1, embed_dim)
+            code_t = code_t.unsqueeze(0)
+
+        quant_b = self.quantize_bottom.get_codebook_entry(code_b, shape=(code_b.shape[0], *self.quantize_bottom.latent_dim))
+        quant_t = self.quantize_top.get_codebook_entry(code_t, shape=(code_t.shape[0], *self.quantize_top.latent_dim))
+        dec = self.decode(quant_b, quant_t)
+        return dec
+
+    def forward(self, input, return_pred_indices=False, return_only_recon=False):
+        """
+        Encode and decode an input tensor.
+        Args:
+            input (torch.Tensor): Input tensor of shape (B, C, H, W).
+            return_pred_indices (bool): Whether to return the predicted indices.
+            return_only_recon (bool): Whether to return only the reconstructed image.
+        Returns:
+            tuple: Reconstructed tensor, total embedding loss, and predicted indices (if requested).
+        """
+        q_b, q_t, diff, ind = self.encode(input)
+        dec = self.decode(q_b, q_t)
+        if return_only_recon:
+            return dec
+        elif return_pred_indices:
+            return dec, diff, ind
+        else:
+            return dec, diff
+
+    def training_step(self, batch, batch_idx):
+        """
+        Training step for the latent VQ-VAE-2.
+        Args:
+            batch (torch.Tensor): Input batch tensor.
+            batch_idx (int): Index of the current batch.
+        Returns:
+            torch.Tensor: Total loss for the current batch.
+        """
+        # -- 1. Prepare data -------------------------------------- #
+        inputs = self.get_input(batch)
+        recons, qloss, ind = self(inputs, return_pred_indices=True)
+
+        # Decode to pixel‑space once if any perceptual / GAN losses are active
+        if isinstance(self.loss, VQLPIPSWithDiscriminator):
+            with torch.no_grad():
+                inputs_img = self.latents_to_images(inputs)
+                recons_img = self.latents_to_images(recons)
+
+        # -- 2. Compute losses ------------------------------------ #
+        if isinstance(self.loss, VQLPIPSWithDiscriminator):
+            # Two optimizers: (0) generator, (1) discriminator
+            opt_g, opt_d = self.optimizers()
+
+            # Generator / VQ-VAE update (optimizer_idx = 0)
+            loss_g, log_g = self.loss(
+                inputs, recons,
+                inputs_img, recons_img,
+                qloss,
+                optimizer_idx=0,
+                global_step=self.global_step,
+                predicted_indices=ind,
+                split="train"
+            )
+            opt_g.zero_grad()
+            self.manual_backward(loss_g)
+            opt_g.step()
+
+            # Discriminator update (optimizer_idx = 1)
+            loss_d, log_d = self.loss(
+                inputs.detach(), recons.detach(),
+                inputs_img.detach(), recons_img.detach(),
+                qloss.detach(),
+                optimizer_idx=1,
+                global_step=self.global_step,
+                split="train"
+            )
+            opt_d.zero_grad()
+            self.manual_backward(loss_d)
+            opt_d.step()
+
+            total_loss = loss_g + loss_d
+            log_dict = {**log_g, **log_d}
+
+        elif isinstance(self.loss, SimpleVQVAELoss):
+            total_loss, log_dict = self.loss(
+                inputs=inputs,
+                recons=recons,
+                qloss=qloss,
+                split="train",
+            )
+
+        # -- 3. Log ------------------------------------------------------------- #
+        self.log_dict(log_dict, prog_bar=False, on_step=True, on_epoch=False, sync_dist=True)
+        self.log("train/total_loss", total_loss, prog_bar=False,
+                 on_step=True, on_epoch=True, sync_dist=True)
+        return total_loss
+
+    def validation_step(self, batch, batch_idx):
+        """
+        Validation step for the latent VQ-VAE-2.
+        Args:
+            batch (torch.Tensor): Input batch tensor.
+            batch_idx (int): Index of the current batch.
+        Returns:
+            torch.Tensor: Total loss for the current batch.
+        """
+        # -- 1. Prepare data -------------------------------------- #
+        inputs = self.get_input(batch)
+        recons, qloss, ind = self(inputs, return_pred_indices=True)
+
+        # Pixel‑space reconstructions needed for perceptual / FID / spectral
+        if isinstance(self.loss, VQLPIPSWithDiscriminator) or self.track_fid or self.track_spectral:
+            with torch.no_grad():
+                inputs_img = self.latents_to_images(inputs)
+                recons_img = self.latents_to_images(recons)
+            if self.track_fid or self.track_spectral:
+                self._val_recons_img.append(recons_img.cpu())
+
+        # -- 2. Compute losses ------------------------------------ #
+        if isinstance(self.loss, VQLPIPSWithDiscriminator):
+            loss_g, log_g = self.loss(
+                inputs, recons,
+                inputs_img, recons_img,
+                qloss,
+                optimizer_idx=0,
+                global_step=self.global_step,
+                predicted_indices=ind,
+                split="val"
+            )
+            loss_d, log_d = self.loss(
+                inputs.detach(), recons.detach(),
+                inputs_img.detach(), recons_img.detach(),
+                qloss.detach(),
+                optimizer_idx=1,
+                global_step=self.global_step,
+                split="val"
+            )
+            total_loss = loss_g + loss_d
+            log_dict   = {**log_g, **log_d}
+
+        elif isinstance(self.loss, SimpleVQVAELoss):
+            total_loss, log_dict = self.loss(
+                inputs=inputs,
+                recons=recons,
+                qloss=qloss,
+                split="val",
+            )
+
+        # -- 3. Log ------------------------------------------------------------- #
+        self.log_dict(log_dict, prog_bar=False, on_step=False, on_epoch=True, sync_dist=True)
+        self.log("val/total_loss", total_loss, prog_bar=True,
+                 on_step=False, on_epoch=True, sync_dist=True)
+
+        return total_loss
+
+    def configure_optimizers(self):
+        """ Re-uses the same optimizer strategy as LatentVQVAE """
+        if isinstance(self.loss, VQLPIPSWithDiscriminator):
+            d_params = list(self.loss.discriminator.parameters())
+            d_ids    = set(id(p) for p in d_params)
+            g_params = [p for p in self.parameters() if id(p) not in d_ids]
+
+            lr_g = self.learning_rate
+            lr_d = 4 * lr_g
+
+            opt_g = torch.optim.Adam(g_params, lr=lr_g, betas=(0.5, 0.999))
+            opt_d = torch.optim.Adam(d_params, lr=lr_d, betas=(0.0, 0.999))
+            return [opt_g, opt_d]
+
+        elif isinstance(self.loss, SimpleVQVAELoss):
+            return torch.optim.Adam(self.parameters(), lr=self.learning_rate)
 
 
 class LatentAutoencoder(LatentModel):
