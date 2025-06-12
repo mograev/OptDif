@@ -84,7 +84,9 @@ def train_gbo(
     # Perform PCA
     pca = PCA()
     logger.info("Performing PCA on input data")
+    start_time = time.time()
     Z_train = pca.fit_transform(X_train)
+    logger.info(f"PCA took {time.time() - start_time:.2f}s to finish")
     logger.info(f"Z_train shape: {Z_train.shape}")
 
     # Reduce to n_pca_components
