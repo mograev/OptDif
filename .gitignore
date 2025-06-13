@@ -6,6 +6,7 @@ data/ffhq/sd_latents/
 data/ffhq/ffhq-dataset-v2.json
 data/ffhq/sd_latents.pt
 data/ffhq/sd_latents_pca_model.pkl
+data/ffhq/sd_latents_smile_model.pt
 
 # Demo
 demo/losses/
