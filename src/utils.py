@@ -16,8 +16,12 @@ def zero_mean_unit_var_normalization(X, mean=None, std=None):
     compute_mean_std = mean is None and std is None
 
     if compute_mean_std:
-        mean = np.mean(X, axis=0)
-        std = np.std(X, axis=0)
+        if isinstance(X, torch.Tensor):
+            mean = X.mean(dim=0)
+            std = X.std(dim=0)
+        else:
+            mean = np.mean(X, axis=0)
+            std = np.std(X, axis=0)
 
     X_normalized = (X - mean) / std
 

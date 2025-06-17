@@ -16,6 +16,7 @@ from torch.utils.data import DataLoader
 import torch.multiprocessing as mp
 import pytorch_lightning as pl
 import numpy as np
+from torchvision import transforms
 
 # Stable Diffusion VAE
 from diffusers import AutoencoderKL
@@ -25,7 +26,7 @@ from src.dataloader.ffhq import FFHQWeightedDataset
 from src.dataloader.utils import SimpleFilenameToTensorDataset
 from src.dataloader.weighting import DataWeighter
 from src.classification.smile_classifier import SmileClassifier
-from src.models.latent_models import LatentVQVAE
+from src.models.latent_models import LatentVQVAE, LatentVQVAE2
 from src.utils import SubmissivePlProgressbar
 from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE, ENTMOOT_TRAIN_OPT_FILE, GBO_FI_TRAIN_FILE, GBO_FI_OPT_FILE
 
@@ -206,11 +207,22 @@ def _encode_latents(latent_model, dataloader, opt_strategy, device):
         for sd_tensor_batch in dataloader:
             # Move sd latents to the correct device
             sd_latents = sd_tensor_batch.to(device)
-            
+
             # Encode sd latents into lower dim latent space
             if opt_strategy == "ENTMOOT":
                 # Get discrete indices for ENTMOOT
                 latents = latent_model.encode(sd_latents)[2]
+            elif isinstance(latent_model, LatentVQVAE2):
+                latents_b, latents_t, _, _ = latent_model.encode(sd_latents)
+                # Store latent shapes in model
+                latent_model.latent_b_shape = latents_b.shape[1:]
+                latent_model.latent_t_shape = latents_t.shape[1:]
+                latent_model.divide_point = int(torch.tensor(latent_model.latent_b_shape).prod().item())
+                # Flatten the two parts
+                latents_b = latents_b.view(latents_b.shape[0], -1)
+                latents_t = latents_t.view(latents_t.shape[0], -1)
+                # Concatenate the two parts
+                latents = torch.cat([latents_b, latents_t], dim=1)
             else:
                 latents = latent_model.encode(sd_latents)[0]
 
@@ -246,6 +258,15 @@ def _decode_and_predict(latent_model, sd_vae, predictor, z, opt_strategy, device
             if opt_strategy == "ENTMOOT":
                 # Decode discrete indices for ENTMOOT
                 sd_lats = latent_model.decode_code(latents)
+            elif isinstance(latent_model, LatentVQVAE2):
+                # Decode latent vectors for LatentVQVAE2
+                latents_b = latents[:, :latent_model.divide_point].view(
+                    -1, *latent_model.latent_b_shape
+                )
+                latents_t = latents[:, latent_model.divide_point:].view(
+                    -1, *latent_model.latent_t_shape
+                )
+                sd_lats = latent_model.decode(latents_b, latents_t)
             else:
                 sd_lats = latent_model.decode(latents)
 
@@ -371,14 +392,14 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
 
         # -- 2. Optimize surrogate acquisition function ----------- #
         
-        opt_path = run_folder / f"bo_opt_res.npy"
+        opt_path = run_folder / f"bo_opt_res.npz"
         log_path = run_folder / f"bo_opt.log"
 
         dngo_opt_command = [
             "python",
             BO_OPT_FILE,
             f"--seed={iter_seed}",
-            f"--surrogate_type={args.bo_surrogate}",
+            f"--surrogate_type={args.opt_strategy}",
             f"--surrogate_file={str(curr_bo_file)}",
             f"--data_file={str(data_file)}",
             f"--save_file={str(opt_path)}",
@@ -454,6 +475,7 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
                 f"--logfile={str(log_path)}",
                 f"--n_starts={args.n_starts}",
                 f"--n_out={str(num_queries_to_do)}",
+                f"--sample_distribution={args.sample_distribution}",
             ]
         elif args.opt_strategy == "GBO_FI":
             gbo_opt_command = [
@@ -526,6 +548,8 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
             args.opt_strategy,
             device
         )
+    else:
+        x_new_init = None
 
     # Reset pbar description
     if pbar is not None:
@@ -557,7 +581,7 @@ def main_loop(args):
     data_dir.mkdir()
     sd_latent_dir = data_dir / "sd_latents"
     sd_latent_dir.mkdir()
-    sd_latent_dir = "/scratch/inf0/user/mgraeving/OptDif/results/temp_latents"
+    sd_latent_dir = Path("/BS/optdif/work/results/temp_latents")
     samples_dir = data_dir / "samples"
     samples_dir.mkdir()
 
@@ -565,7 +589,15 @@ def main_loop(args):
     setup_logger(result_dir / "main.log")
     
     # Load datamodule
-    datamodule = FFHQWeightedDataset(args, DataWeighter(args))
+    datamodule = FFHQWeightedDataset(
+        args,
+        data_weighter=DataWeighter(args),
+        transform=transforms.Compose([
+            transforms.Resize(size=256),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        ])
+    )
     
     # Load pre-trained SD-VAE model
     if args.sd_vae_path == "stabilityai/stable-diffusion-3.5-medium":
@@ -583,7 +615,7 @@ def main_loop(args):
         latent_model_config = yaml.safe_load(f)
 
     # Initialize latent model
-    latent_model = LatentVQVAE(
+    latent_model = LatentVQVAE2(
         ddconfig=latent_model_config["ddconfig"],
         lossconfig=latent_model_config["lossconfig"],
         ckpt_path=args.latent_model_ckpt_path,
@@ -626,7 +658,7 @@ def main_loop(args):
     #     args.device
     # )
 
-    # # Save the encoded images as tensors
+    # # # # Save the encoded images as tensors
     # for filename, sd_latent in zip(datamodule.train_dataset.filename_list, sd_latents):
     #     torch.save(sd_latent, sd_latent_dir / f"{filename}.pt", pickle_protocol=pickle.HIGHEST_PROTOCOL)
 

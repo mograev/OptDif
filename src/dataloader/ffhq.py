@@ -15,13 +15,14 @@ from src.dataloader.utils import MultiModeDataset
 class FFHQWeightedDataset(pl.LightningDataModule):
     """DataModule class for the FFHQ dataset with weighted sampling with support for multiple tensor modes."""
 
-    def __init__(self, args, data_weighter, encoder=None):
+    def __init__(self, args, data_weighter, encoder=None, transform=None):
         """
         Initialize the FFHQWeightedDataset class.
         Args:
             args (argparse.Namespace): Command line arguments.
             data_weighter (object): DataWeighter object for weighting the dataset.
             encoder (object): Encoder object for encoding images.
+            transform (callable, optional): Transform to apply to the images.
         """
 
         super().__init__()
@@ -59,17 +60,15 @@ class FFHQWeightedDataset(pl.LightningDataModule):
 
         # Whether to perform image augmentation
         self.aug = args.aug
-        if self.aug:
-            # self.transform = transforms.Compose([
-            # transforms.RandomHorizontalFlip(p=0.5),
-            # transforms.RandomResizedCrop(size=256, scale=(0.8, 1.0))
-            # ])
+        if self.aug and transform is None:
             self.transform = transforms.Compose([
                 transforms.RandomHorizontalFlip(p=0.5),
                 transforms.RandomResizedCrop(size=256, scale=(0.8, 1.0)),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
             ])
+        elif transform is not None:
+            self.transform = transform
         else:
             self.transform = None
 

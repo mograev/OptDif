@@ -90,6 +90,9 @@ def opt_gbo(
     # Load the data
     with np.load(data_file, allow_pickle=True) as npz:
         X_train = npz['X_train'].astype(np.float32)
+        # Flatten, but store original shape for later
+        x_shape = X_train.shape[1:]
+        X_train = X_train.reshape(X_train.shape[0], -1)
     logger.info(f"X_train shape: {X_train.shape}")
 
     # Normalize inputs
@@ -121,7 +124,7 @@ def opt_gbo(
         # Optimizer setup
         z.requires_grad = True
         optimizer = torch.optim.Adam([z], lr=1e-3)
-        n_steps = 2000
+        n_steps = 5000
 
         # Adaptive ALM setup
         R = z.shape[1] ** 0.5
@@ -133,9 +136,27 @@ def opt_gbo(
         mu_min, mu_max = 1e-3, 1e6
         k_update  = 10 # only touch μ every k steps
 
+        # Early stopping parameters
+        best_score = -float('inf')
+        no_improve = 0
+        patience = 200  # stop if no improvement in this many steps
+        improve_margin = 1e-4  # minimum improvement to count as progress
+
+
         for step in range(n_steps):
             optimizer.zero_grad()
             score = model(z)
+
+            # Check for improvement
+            current = score.item()
+            if current > best_score + improve_margin:
+                best_score = current
+                no_improve = 0
+            else:
+                no_improve += 1
+            if no_improve >= patience:
+                logger.info(f"Early stopping at step {step}, no improvement for {patience} steps.")
+                break
 
             # Compute constraint and loss at current z
             g_norm = torch.norm(z) - R   # signed constraint value
@@ -197,7 +218,6 @@ def opt_gbo(
         # debugging
         logger.info(f"X statistics: mean {X_new.mean()}, std {X_new.std()}" +
                 f", min {X_new.min()}, max {X_new.max()}")
-        logger.info(f"X: {X_new}")
 
         # Append the results
         list_z.append(X_new)
@@ -218,6 +238,10 @@ def opt_gbo(
     # Filter top n_out and filter X_samples accordingly
     latent_arr = latent_arr[top_indices]
     X_sampled = X_sampled[top_indices].astype(np.float32)
+
+    # Reshape to original input shape
+    latent_arr = latent_arr.reshape(-1, *x_shape)
+    X_sampled = X_sampled.reshape(-1, *x_shape)
 
     # Save the results
     logger.info("Saving results")
