@@ -27,7 +27,7 @@ from src.dataloader.weighting import DataWeighter
 from src.classification.smile_classifier import SmileClassifier
 from src.models.lit_vae import LitVAE
 from src.utils import SubmissivePlProgressbar
-from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE, ENTMOOT_TRAIN_OPT_FILE, GBO_PCA_TRAIN_FILE, GBO_PCA_OPT_FILE, GBO_FI_TRAIN_FILE, GBO_FI_OPT_FILE, DNGO_PCA_TRAIN_FILE, BO_PCA_OPT_FILE
+from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE, ENTMOOT_TRAIN_OPT_FILE, GBO_PCA_TRAIN_FILE, GBO_PCA_OPT_FILE, GBO_FI_TRAIN_FILE, GBO_FI_OPT_FILE
 
 
 # Weighted Retraining arguments
@@ -55,12 +55,14 @@ def add_opt_args(parser):
 
     # Common arguments
     opt_group = parser.add_argument_group("Optimization")
-    opt_group.add_argument("--opt_strategy", type=str, choices=["GBO", "DNGO", "DNGO_PCA", "GP", "GBO_PCA", "GBO_FI"], help="Optimization strategy to use")
+    opt_group.add_argument("--opt_strategy", type=str, choices=["GBO", "DNGO", "GP", "GBO_PCA", "GBO_FI"], help="Optimization strategy to use")
     opt_group.add_argument("--n_starts", type=int, default=20, help="Number of optimization runs with different initial values")
     opt_group.add_argument("--n_rand_points", type=int, default=8000, help="Number of random points to sample for surrogate model training")
     opt_group.add_argument("--n_best_points", type=int, default=2000, help="Number of best points to sample for surrogate model training")
-    opt_group.add_argument("--n_opt_dims", type=int, default=1024, help="Number of (PCA or FI) dimensions to use")
     opt_group.add_argument("--sample_distribution", type=str, default="normal", choices=["normal", "uniform", "train_data"], help="Distribution to sample from: 'normal', 'uniform' or 'train_data'")
+    opt_group.add_argument("--feature_selection", type=str, default=None, choices=["PCA", "FI"], help="Feature selection method to use: 'PCA' or 'FI'. If None, no feature selection is applied.")
+    opt_group.add_argument("--feature_selection_dims", type=int, default=512, help="Number of (PCA or FI) dimensions to use. If feature_selection is None, this is ignored.")
+    opt_group.add_argument("--feature_selection_model_path", type=str, default=None, help="Path to the feature selection model. If feature_selection is None, this is ignored.")
 
     # BO arguments (used for both DNGO and GP)
     bo_group = parser.add_argument_group("BO")
@@ -291,7 +293,7 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
 
     # -- Optimization based on strategy --------------------------- #
 
-    if args.opt_strategy in ["GP", "DNGO", "DNGO_PCA"]:
+    if args.opt_strategy in ["GP", "DNGO"]:
 
         # -- 1. Fit surrogate model ------------------------------- #
 
@@ -326,23 +328,10 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
                 f"--data_file={str(data_file)}",
                 f"--save_file={str(new_bo_file)}",
                 f"--logfile={str(log_path)}",
-            ]
-
-            if pbar is not None:
-                pbar.set_description("DNGO initial fit")
-
-            _run_command(dngo_train_command, f"DNGO train")
-
-        elif args.opt_strategy == "DNGO_PCA":
-
-            dngo_train_command = [
-                "python",
-                DNGO_PCA_TRAIN_FILE,
-                f"--seed={iter_seed}",
-                f"--data_file={str(data_file)}",
-                f"--save_file={str(new_bo_file)}",
-                f"--logfile={str(log_path)}",
-                f"--n_pca_components={args.n_opt_dims}",
+                f"--feature_selection={args.feature_selection}" if args.feature_selection else "",
+                f"--feature_selection_dims={args.feature_selection_dims}" if args.feature_selection else "",
+                f"--feature_selection_model_path={args.feature_selection_model_path}" if args.feature_selection_model_path else "",
+                f"--device={args.device}",
             ]
 
             if pbar is not None:
@@ -359,9 +348,9 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
 
         bo_opt_command = [
             "python",
-            BO_PCA_OPT_FILE if args.opt_strategy == "DNGO_PCA" else BO_OPT_FILE,
+            BO_OPT_FILE,
             f"--seed={iter_seed}",
-            f"--surrogate_type={"DNGO" if args.opt_strategy in ["DNGO", "DNGO_PCA"] else "GP"}",
+            f"--surrogate_type={args.opt_strategy}",
             f"--surrogate_file={str(curr_bo_file)}",
             f"--data_file={str(data_file)}",
             f"--save_file={str(opt_path)}",
@@ -379,8 +368,9 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
             bo_opt_command.append(f"--opt_constraint_strategy={args.opt_constraint_strategy}")
             bo_opt_command.append(f"--n_gmm_components={args.n_gmm_components}")
 
-        if args.opt_strategy == "DNGO_PCA":
-            bo_opt_command.append(f"--n_pca_components={args.n_opt_dims}")
+        if args.feature_selection is not None:
+            bo_opt_command.append(f"--feature_selection={args.feature_selection}")
+            bo_opt_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
 
         if pbar is not None:
             pbar.set_description("optimizing acq func")

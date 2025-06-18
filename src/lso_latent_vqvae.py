@@ -63,7 +63,9 @@ def add_opt_args(parser):
     opt_group.add_argument("--n_starts", type=int, default=20, help="Number of optimization runs with different initial values")
     opt_group.add_argument("--n_rand_points", type=int, default=8000, help="Number of random points to sample for surrogate model training")
     opt_group.add_argument("--n_best_points", type=int, default=2000, help="Number of best points to sample for surrogate model training")
-    opt_group.add_argument("--n_opt_dims", type=int, default=512, help="Number of (PCA or FI) dimensions to use for GBO")
+    opt_group.add_argument("--feature_selection", type=str, default=None, choices=["PCA", "FI"], help="Feature selection method to use: 'PCA' or 'FI'. If None, no feature selection is applied.")
+    opt_group.add_argument("--feature_selection_dims", type=int, default=512, help="Number of (PCA or FI) dimensions to use. If feature_selection is None, this is ignored.")
+    opt_group.add_argument("--feature_selection_model_path", type=str, default=None, help="Path to the feature selection model. If feature_selection is None, this is ignored.")
 
     # BO arguments (used for both DNGO and GP)
     bo_group = parser.add_argument_group("BO")
@@ -381,6 +383,10 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
                 f"--data_file={str(data_file)}",
                 f"--save_file={str(new_bo_file)}",
                 f"--logfile={str(log_path)}",
+                f"--feature_selection={args.feature_selection}" if args.feature_selection else "",
+                f"--feature_selection_dims={args.feature_selection_dims}" if args.feature_selection else "",
+                f"--feature_selection_model_path={args.feature_selection_model_path}" if args.feature_selection_model_path else "",
+                f"--device={args.device}",
             ]
 
             if pbar is not None:
@@ -395,7 +401,7 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
         opt_path = run_folder / f"bo_opt_res.npz"
         log_path = run_folder / f"bo_opt.log"
 
-        dngo_opt_command = [
+        bo_opt_command = [
             "python",
             BO_OPT_FILE,
             f"--seed={iter_seed}",
@@ -413,13 +419,17 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
         ]
 
         if args.opt_constraint_threshold is not None:
-            dngo_opt_command.append(f"--opt_constraint_threshold={args.opt_constraint_threshold}")
-            dngo_opt_command.append(f"--opt_constraint_strategy={args.opt_constraint_strategy}")
-            dngo_opt_command.append(f"--n_gmm_components={args.n_gmm_components}")
+            bo_opt_command.append(f"--opt_constraint_threshold={args.opt_constraint_threshold}")
+            bo_opt_command.append(f"--opt_constraint_strategy={args.opt_constraint_strategy}")
+            bo_opt_command.append(f"--n_gmm_components={args.n_gmm_components}")
+
+        if args.feature_selection is not None:
+            bo_opt_command.append(f"--feature_selection={args.feature_selection}")
+            bo_opt_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
 
         if pbar is not None:
             pbar.set_description("optimizing acq func")
-        _run_command(dngo_opt_command, f"Surrogate opt")
+        _run_command(bo_opt_command, f"Surrogate opt")
 
     elif args.opt_strategy in ["GBO", "GBO_FI"]:
 
