@@ -10,7 +10,9 @@ import time
 
 import numpy as np
 import torch
+from sklearn.decomposition import PCA
 
+from src.metrics.feature_importance import compute_feature_importance_from_data, compute_feature_importance_from_model
 from src.gbo.gbo_model import GBOModel
 from src.utils import zero_mean_unit_var_normalization, zero_mean_unit_var_denormalization
 
@@ -21,49 +23,45 @@ gbo_opt_group.add_argument("--logfile", type=str, help="file to log to", default
 gbo_opt_group.add_argument("--seed", type=int, required=True)
 gbo_opt_group.add_argument("--model_file", type=str, help="file to load model from", required=True)
 gbo_opt_group.add_argument("--save_file", type=str, required=True, help="path to save results to")
-gbo_opt_group.add_argument("--data_file", type=str, help="file to load data from", default=None)
+gbo_opt_group.add_argument("--data_file", type=str, help="file to load data from", required=True)
 gbo_opt_group.add_argument("--n_starts", type=int, default=1, help="number of random starts")
 gbo_opt_group.add_argument("--n_out", type=int, default=1, help="number of outputs")
 gbo_opt_group.add_argument("--sample_distribution", type=str, default="normal", help="distribution to sample from (normal, uniform or train data)")
 gbo_opt_group.add_argument("--device", type=str, default="cpu", help="device to use for training (cpu or cuda)")
+gbo_opt_group.add_argument("--feature_selection", type=str, default=None, choices=["PCA", "FI"], help="Feature selection method to use: 'PCA' or 'FI'. If None, no feature selection is applied.")
+gbo_opt_group.add_argument("--feature_selection_dims", type=int, default=512, help="Number of (PCA or FI) dimensions to use. If feature_selection is None, this is ignored.")
 
-
-def diversity_penalty(z, archive, sigma=None, lam=1.0):
-    """
-    Repulsion term that penalises proximity to previous solutions.
-    Args:
-        z (tensor): current latent vector
-        archive (list): earlier solutions
-        sigma (float | None): kernel width; if None use 0.25·√d
-        lam (float): penalty strength
-    Returns:
-        torch.tensor: penalty term
-    """
-    if not archive:
-        return torch.tensor(0.0, dtype=z.dtype, device=z.device)
-
-    d = z.shape[1]
-    if sigma is None:
-        # ~25 % of typical inter‑point distance for U[0,1]^d
-        sigma = 0.25 * (d ** 0.5)
-
-    # Squared Euclidean distances WITHOUT the /d scaling
-    dist2 = torch.stack([(z - p).pow(2).sum() for p in archive])
-
-    # RBF kernel; values now drop from 1 → e⁻² ≈ 0.14 when ‖z-p‖ ≈ σ√2
-    return lam * torch.exp(-dist2 / (2 * sigma ** 2)).sum()
 
 def opt_gbo(
     logfile,
     model_file,
     save_file,
-    data_file=None,
+    data_file,
     n_starts=1,
     n_out=1,
     sample_distribution="normal",
     device="cpu",
+    feature_selection=None,
+    feature_selection_dims=512,
 ):
-    
+    """
+    Optimize the GBO model in the latent space.
+    Args:
+        logfile (str): Path to the log file.
+        model_file (str): Path to the model file.
+        save_file (str): Path to save the optimized latent variables.
+        data_file (str): Path to the data file for training data distribution sampling.
+        n_starts (int): Number of random starts for optimization.
+        n_out (int): Number of outputs to return.
+        sample_distribution (str): Distribution to sample from ("normal", "uniform", or "train_data").
+        device (str): Device to use for training ('cpu' or 'cuda').
+        feature_selection (str): Feature selection method to use ('PCA' or 'FI'). If None, no feature selection is applied.
+        feature_selection_dims (int): Number of dimensions to use for feature selection. Ignored if
+    Returns:
+        np.ndarray: Optimized latent variables.
+    """
+
+    # -- Setup & Load Data ---------------------------------------- #    
     # Set up logger
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG) # INFO
@@ -76,7 +74,67 @@ def opt_gbo(
     normalize_input = ckpt['normalize_input']
     normalize_output = ckpt['normalize_output']
 
-    # Setup model
+    # Load train data
+    with np.load(data_file, allow_pickle=True) as npz:
+        X_train = npz['X_train'].astype(np.float32)
+    x_shape = X_train.shape[1:]
+    logger.info(f"X_train shape: {X_train.shape}")
+
+    # Normalize inputs
+    if normalize_input:
+        logger.info("Normalizing input data")
+        X_train = zero_mean_unit_var_normalization(X_train, X_mean, X_std)
+        logger.debug(f"X_train stats after normalization: mean {X_train.mean()}, std {X_train.std()}, min {X_train.min()}, max {X_train.max()}")
+
+    # -- Optional feature selection ------------------------------- #
+    if feature_selection == "PCA":
+        pca = PCA().set_params(n_components=ckpt['pca_components'].shape[0])
+        pca.components_, pca.mean_, pca.explained_variance_ = ckpt["pca_components"], ckpt["pca_mean"], ckpt["pca_explained_variance"]
+
+        # Transform the training data using PCA
+        X_train = pca.transform(X_train)
+        logger.info(f"Training data PCA min/max: {X_train.min():.2f}/{X_train.max():.2f}, "
+                    f"mean/std: {X_train.mean():.2f}/{X_train.std():.2f}")
+        opt_indices = np.arange(feature_selection_dims)
+    elif feature_selection == "FI":
+        feature_importance = ckpt["feature_importance"]
+
+        # Sort features by importance and select top features
+        sorted_indices = np.argsort(feature_importance)[::-1]
+        if feature_selection_dims < X_train.shape[1]:
+            logger.info(f"Selecting top {feature_selection_dims} features based on importance")
+            opt_indices = sorted_indices[:feature_selection_dims]
+
+    # -- Initialize latent grid ----------------------------------- #
+    if sample_distribution == "train_data":
+        logger.info("Sampling from training data distribution")
+        indices = np.random.choice(X_train.shape[0], size=n_starts)
+        latent_grid = torch.tensor(X_train[indices], device=device, dtype=torch.float32)
+
+    elif sample_distribution == "uniform":
+        logger.info("Sampling from uniform distribution")
+        latent_grid = torch.rand(n_starts, X_train.shape[1], device=device)
+
+    elif sample_distribution == "normal":
+        logger.info("Sampling from normal distribution")
+        latent_grid = torch.randn(n_starts, ckpt['input_dim'])
+
+    else:
+        raise ValueError(f"Unknown sample_distribution: {sample_distribution}")
+
+    # Store init latent grid for analysis
+    latent_grid_init = latent_grid.cpu().numpy().copy()
+    logger.debug(f"latent_grid_init shape: {latent_grid_init.shape}")
+    logger.debug(f"opt indices: {opt_indices}")
+
+    # Optional dim reduction through feature selection
+    if feature_selection == "PCA" or feature_selection == "FI":
+        assert opt_indices is not None, "opt_indices must be provided when feature_selection is 'PCA' or 'FI'"
+        latent_grid = latent_grid[:, opt_indices]
+        X_train = X_train[:, opt_indices]
+    logger.debug(f"Sampling points finished.")
+
+    # -- Setup model ---------------------------------------------- #
     model = GBOModel(
         input_dim=ckpt['input_dim'],
         hidden_dims=ckpt['hidden_dims'],
@@ -85,46 +143,7 @@ def opt_gbo(
     model.load_state_dict(ckpt['model_state_dict'])
     model.eval()
 
-    if sample_distribution == "train_data":
-        logger.info("Sampling from training data distribution")
-        if data_file is None:
-            raise ValueError("data_file must be provided when sample_distribution is 'train_data'")
-        
-        # Load the data
-        with np.load(data_file, allow_pickle=True) as npz:
-            X_train = npz['X_train'].astype(np.float32)
-        logger.info(f"X_train shape: {X_train.shape}")
-
-        # Normalize inputs
-        if normalize_input:
-            logger.info("Normalizing input data")
-            X_train = zero_mean_unit_var_normalization(X_train, X_mean, X_std)
-            logger.debug(f"X_train stats after normalization: mean {X_train.mean()}, std {X_train.std()}, min {X_train.min()}, max {X_train.max()}")
-
-        # Sample from training data
-        indices = np.random.choice(X_train.shape[0], size=n_starts)
-        latent_grid = torch.tensor(X_train[indices], device=device, dtype=torch.float32)
-
-    elif sample_distribution == "uniform":
-        logger.info("Sampling from uniform distribution")
-
-        # Generate latent grid of samples
-        latent_grid = torch.rand(n_starts, ckpt['input_dim'], device=device)
-
-    elif sample_distribution == "normal":
-        logger.info("Sampling from normal distribution")
-
-        # Generate latent grid of samples
-        latent_grid = torch.randn(n_starts, ckpt['input_dim']) 
-
-    else:
-        raise ValueError(f"Unknown sample_distribution: {sample_distribution}")
-    
-    # Store initial latent grid for visualization
-    latent_grid_init = latent_grid.clone().numpy()
-    if normalize_input:
-        latent_grid_init = zero_mean_unit_var_denormalization(latent_grid_init, X_mean, X_std)
-
+    # -- Optimization loop ---------------------------------------- #
     # Run optimization
     logger.info("\n### STARTING OPTIMIZATION ###\n")
     start_time = time.time()
@@ -200,57 +219,75 @@ def opt_gbo(
         z = z.detach().cpu().numpy()
         y = np.array(f_value)
 
-        # Denormalize input and output if necessary
-        if normalize_input:
-            z = zero_mean_unit_var_denormalization(z, X_mean, X_std)
-        if normalize_output:
-            y = zero_mean_unit_var_denormalization(y, y_mean, y_std)
-
         # Logging
         logger.info(f"Iter#{i} steps={step} t={time.time() - start_time:.2f}s val={y:.2f}")
-
-        # Ensure datatype is float32
-        z = z.astype(np.float32)
-        y = y.astype(np.float32)
-
-        # debugging
-        logger.info(f"x statistics: mean {z.mean()}, std {z.std()}" +
-                f", min {z.min()}, max {z.max()}")
-        logger.info(f"x: {z}")
         
         # Append the results
         list_z.append(z)
         list_y.append(y)
 
+    # -- Post-processing ------------------------------------------ #
+
     # Stack into arrays
     latent_arr = np.vstack(list_z)
     y_arr = np.vstack(list_y)
+
+    # Merge fixed dimensions if feature selection was applied
+    if feature_selection == "PCA" or feature_selection == "FI":
+        latent_pred = latent_grid_init.copy()
+        latent_pred[:, opt_indices] = latent_arr
+    else:
+        latent_pred = latent_arr.copy()
 
     # Sort y descending
     sorted_indices = np.argsort(y_arr, axis=0).flatten()[::-1]
     top_indices = sorted_indices[:n_out]
 
     # Filter top n_out
-    latent_arr = latent_arr[top_indices]
+    latent_pred = latent_pred[top_indices]
     latent_grid_init = latent_grid_init[top_indices]
 
     # Ensure the output is float32
-    latent_arr = latent_arr.astype(np.float32)
+    latent_pred = latent_pred.astype(np.float32)
     latent_grid_init = latent_grid_init.astype(np.float32)
+
+    # Optionally invert PCA transformation
+    if feature_selection == "PCA":
+        latent_pred = pca.inverse_transform(latent_pred)
+        latent_grid_init = pca.inverse_transform(latent_grid_init)
+        logger.info(f"latent_pred shape after inverse PCA transform: {latent_pred.shape}")
+
+    # Denormalize input and output if necessary
+    if normalize_input:
+        latent_pred = zero_mean_unit_var_denormalization(latent_pred, X_mean, X_std)
+        latent_grid_init = zero_mean_unit_var_denormalization(latent_grid_init, X_mean, X_std)
+    if normalize_output:
+        y_arr = zero_mean_unit_var_denormalization(y_arr, y_mean, y_std)
+
+    # Ensure datatype is float32
+    latent_pred = latent_pred.astype(np.float32)
+    latent_grid_init = latent_grid_init.astype(np.float32)
+    y_arr = y_arr.astype(np.float32)
+
+    # Reshape to original shape
+    latent_pred = latent_pred.reshape(-1, *x_shape)
+    latent_grid_init = latent_grid_init.reshape(-1, *x_shape)
+
+    logger.info(f"latent_pred shape: {latent_pred.shape}, latent_grid_init shape: {latent_grid_init.shape}")
 
     # Save the results
     logger.info("Saving results")
     np.savez_compressed(
         save_file,
-        z_opt=latent_arr,
+        z_opt=latent_pred,
         z_init=latent_grid_init,
     )
-    logger.info(f"Successful end of script")
 
     # Clean up GPU
     del model
     if device == "cuda":
         torch.cuda.empty_cache()
+    logger.info(f"Successful end of script")
 
     return latent_arr
 
@@ -269,4 +306,6 @@ if __name__ == "__main__":
         n_out=args.n_out,
         sample_distribution=args.sample_distribution,
         device=args.device,
+        feature_selection=args.feature_selection,
+        feature_selection_dims=args.feature_selection_dims,
     )

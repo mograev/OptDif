@@ -238,8 +238,8 @@ def robust_multi_restart_optimizer(
 
     # Store latent grid shape
     latent_grid_dim = latent_grid.shape[1]
-    logger.debug(f"Sampling points finished.")
     logger.debug(f"latent_grid shape: {latent_grid.shape}")
+    logger.debug(f"Sampling points finished.")
 
     # -- Optimization constraints --------------------------------- #
     # Filter out points that are below the GMM threshold if specified
@@ -426,8 +426,7 @@ def opt_main(args):
     x_shape = X_train.shape[1:]
     X_train = X_train.reshape(X_train.shape[0], -1)
     y_train = y_train.reshape(y_train.shape[0])
-    logger.info(f"X_train shape: {X_train.shape}")
-    logger.info(f"y_train shape: {y_train.shape}")
+    logger.info(f"X_train shape: {X_train.shape}, y_train shape: {y_train.shape}")
 
     # Load training checkpoint
     ckpt = torch.load(args.surrogate_file, weights_only=False)
@@ -524,7 +523,7 @@ def opt_main(args):
     # Make some gp predictions in the log file
     logger.info(f"EI results: {ei_vals}")
     if args.surrogate_type == "GP":
-        latent_pred_tensor = torch.tensor(latent_pred)
+        latent_pred_tensor = torch.tensor(latent_pred[:, opt_indices], dtype=torch.float32)
         mu, var = surrogate.predict(latent_pred_tensor)
     elif args.surrogate_type == "DNGO":
         mu, var = surrogate.predict(latent_pred[:, opt_indices])

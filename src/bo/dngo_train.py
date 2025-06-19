@@ -74,8 +74,7 @@ def dngo_train(
     # Reshape the data
     X_train = X_train.reshape(X_train.shape[0], -1)
     y_train = y_train.reshape(y_train.shape[0])
-    logger.info(f"X_train shape: {X_train.shape}")
-    logger.info(f"y_train shape: {y_train.shape}")
+    logger.info(f"X_train shape: {X_train.shape}, y_train shape: {y_train.shape}")
 
     # -- Optional feature selection ------------------------------- #
     if feature_selection == "PCA":
@@ -133,7 +132,7 @@ def dngo_train(
     end_time = time.time()
     logger.info(f"Model fitting took {end_time - start_time:.1f}s to finish")
 
-    # Save DNGO model
+    # -- Save DNGO model ------------------------------------------ #
     logger.info("\nSaving DNGO model")
     ckpt = {
         'model': model,

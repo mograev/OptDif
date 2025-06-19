@@ -8,40 +8,43 @@ import argparse
 import functools
 import logging
 import time
+import pickle
 
 import numpy as np
 import torch
 import gpytorch
 from sklearn.cluster import MiniBatchKMeans
+from sklearn.decomposition import PCA
+
+from src.metrics.feature_importance import compute_feature_importance_from_data, compute_feature_importance_from_model
 
 from src.bo.gp_model import SparseGPModel
 
 
-# -----------------------------------------------------------------------------#
-#  Arguments
-# -----------------------------------------------------------------------------#
-
+# Arguments
 parser = argparse.ArgumentParser()
-parser.add_argument("--logfile", type=str, default="gp_train.log")
-parser.add_argument("--seed", type=int, required=True)
-parser.add_argument("--device", type=str, default="cpu")
-parser.add_argument("--kmeans_init", action="store_true")
-parser.add_argument("--nZ", type=int)
-parser.add_argument("--data_file", type=str, required=True)
-parser.add_argument("--n_opt_iter", type=int, default=100000)
-parser.add_argument("--save_file", type=str, required=True)
-parser.add_argument("--convergence_tol", type=float, default=5e-4)
-parser.add_argument("--kernel_convergence_tol", type=float, default=2.5e-2)
-parser.add_argument("--no_early_stopping", dest="early_stopping", action="store_false")
-parser.add_argument("--measure_freq", type=int, default=100)
-parser.add_argument("--z_noise", type=float, default=None)
-parser.add_argument("--learning_rate", type=float, default=3e-2)
-parser.add_argument("--kernel_learning_rate", type=float, default=1e-1)
+gp_train_group = parser.add_argument_group("GP training")
+gp_train_group.add_argument("--logfile", type=str, default="gp_train.log")
+gp_train_group.add_argument("--seed", type=int, required=True)
+gp_train_group.add_argument("--device", type=str, default="cpu")
+gp_train_group.add_argument("--kmeans_init", action="store_true")
+gp_train_group.add_argument("--nZ", type=int)
+gp_train_group.add_argument("--data_file", type=str, required=True)
+gp_train_group.add_argument("--n_opt_iter", type=int, default=100000)
+gp_train_group.add_argument("--save_file", type=str, required=True)
+gp_train_group.add_argument("--convergence_tol", type=float, default=5e-4)
+gp_train_group.add_argument("--kernel_convergence_tol", type=float, default=2.5e-2)
+gp_train_group.add_argument("--no_early_stopping", dest="early_stopping", action="store_false")
+gp_train_group.add_argument("--measure_freq", type=int, default=100)
+gp_train_group.add_argument("--z_noise", type=float, default=None)
+gp_train_group.add_argument("--learning_rate", type=float, default=3e-2)
+gp_train_group.add_argument("--kernel_learning_rate", type=float, default=1e-1)
+gp_train_group.add_argument('--feature_selection', type=str, default=None, choices=["PCA", "FI"], help="Feature selection method to use: 'PCA' or 'FI'. If None, no feature selection is applied.")
+gp_train_group.add_argument('--feature_selection_dims', type=int, default=512, help="Number of (PCA or FI) dimensions to use. If feature_selection is None, this is ignored.")
+gp_train_group.add_argument('--feature_selection_model_path', type=str, default=None, help="Path to the feature selection model file.")
 
-# -----------------------------------------------------------------------------#
-#  Utilities
-# -----------------------------------------------------------------------------#
 
+# -- Utilities ---------------------------------------------------- #
 def gp_performance_metrics(model, likelihood, X_train, y_train):
     """
     Compute negative ELBO, RMSE, and predictive log-likelihood on the training set.
@@ -96,10 +99,7 @@ def _format_dict(d):
     return out
 
 
-# -----------------------------------------------------------------------------#
-#  Training routine
-# -----------------------------------------------------------------------------#
-
+# -- Training routine --------------------------------------------- #
 def gp_train(
     nZ,
     data_file,
@@ -115,6 +115,9 @@ def gp_train(
     z_noise=None,
     learning_rate=3e-2,
     kernel_learning_rate=1e-1,
+    feature_selection=None,
+    feature_selection_dims=512,
+    feature_selection_model_path=None,
 ):
     """
     Train a sparse Gaussian Process model using GPyTorch.
@@ -133,8 +136,11 @@ def gp_train(
         z_noise (float or None): Optional noise added to inducing points.
         learning_rate (float): Learning rate for the optimizer.
         kernel_learning_rate (float): Learning rate for the kernel optimizer.
+        feature_selection (str): Feature selection method ('PCA' or 'FI'). If None, no feature selection is applied.
+        feature_selection_dims (int): Number of dimensions to use for feature selection. Ignored if feature_selection is None.
+        feature_selection_model_path (str): Path to the feature selection model file, if applicable.
     """
-    # ------------------------------------------------------------------ setup --
+    # -- Setup & Load Data ---------------------------------------- #
     # Logging
     logger = logging.getLogger()
     logger.setLevel(logging.INFO)
@@ -149,11 +155,57 @@ def gp_train(
 
     logger.info(f"X_train shape: {X_train.shape}, y_train shape: {y_train.shape}")
 
+    # -- Optional feature selection ------------------------------- #
+    if feature_selection == "PCA":
+        # If model path is provided, load pre-trained PCA model, else fit PCA on the training data
+        if feature_selection_model_path is not None:
+            logger.info(f"Loading pre-trained PCA model from {feature_selection_model_path}")
+            with open(feature_selection_model_path, 'rb') as f:
+                pca = pickle.load(f)
+        else:
+            logger.info(f"Applying PCA with {feature_selection_dims} components")
+            pca = PCA(n_components=feature_selection_dims)
+            pca.fit(X_train)
+            logger.info(f"Transformed X_train shape after PCA: {X_train.shape}")
+
+        # Transform the training data using PCA
+        X_train = pca.transform(X_train)
+        
+        # Reduce to feature_selection_dims components
+        if feature_selection_dims < X_train.shape[1]:
+            logger.info(f"Reducing to {feature_selection_dims} PCA components")
+            X_train = X_train[:, :feature_selection_dims]
+
+    elif feature_selection == "FI":
+        # If model path is provided, load pre-trained feature importance model, else compute feature importance
+        if feature_selection_model_path is not None:
+            # load state dict from file
+            logger.info(f"Loading pre-trained feature importance model from {feature_selection_model_path}")
+            with open(feature_selection_model_path, 'rb') as f:
+                feature_importance_model = pickle.load(f)
+            feature_importance = compute_feature_importance_from_model(
+                feature_importance_model, X_train, device=device
+            )
+        else:
+            logger.info(f"Computing feature importance using training data")
+            # Compute feature importance from training data
+            feature_importance = compute_feature_importance_from_data(
+                X_train, y_train, hidden_dims=[128, 64], lr=1e-3, batch_size=64, epochs=100, device=device
+            )
+
+        # Select top feature_selection_dims features based on importance
+        if feature_selection_dims < feature_importance.shape[0]:
+            logger.info(f"Selecting top {feature_selection_dims} features based on importance")
+            top_indices = np.argsort(feature_importance)[-feature_selection_dims:]
+            X_train = X_train[:, top_indices]
+        else:
+            logger.info("Using all features as feature_selection_dims is greater than or equal to the number of features")
+
+    # -- Initialize hyperparameters ------------------------------- #
+    logger.info("Initializing hyperparameters")
+
     # Number of features
     D = X_train.shape[1]
-
-    # ------------------------------------------------------------------ init --
-    logger.info("Initializing hyperparameters")
 
     # Initialize inducing points
     if kmeans_init:
@@ -268,7 +320,7 @@ def gp_train(
 
     logger.info("Training complete")
 
-    # ----------------------------------------------------------------- save --
+    # -- Save model ----------------------------------------------- #
     logger.info("Saving model")
 
     ckpt = {
@@ -276,12 +328,21 @@ def gp_train(
         "inducing_points": model.Z.cpu(),
         "ard_dims": model.covar_module.base_kernel.ard_num_dims,
     }
+    if feature_selection == "PCA":
+        ckpt.update({
+            'pca_components': pca.components_,
+            'pca_mean': pca.mean_,
+            'pca_explained_variance': pca.explained_variance_,
+        })
+    elif feature_selection == "FI":
+        ckpt.update({
+            'feature_importance': feature_importance
+        })
+
     torch.save(ckpt, save_file)
+    logger.info(f"\nSuccessful end of script")
 
 
-# -----------------------------------------------------------------------------#
-#  CLI
-# -----------------------------------------------------------------------------#
 
 if __name__ == "__main__":
     
@@ -289,4 +350,4 @@ if __name__ == "__main__":
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    gp_train(args.nZ, args.data_file, args.save_file, args.logfile, args.device, args.kmeans_init, args.n_opt_iter, args.convergence_tol, args.kernel_convergence_tol, args.early_stopping, args.measure_freq, args.z_noise, args.learning_rate, args.kernel_learning_rate)
+    gp_train(args.nZ, args.data_file, args.save_file, args.logfile, args.device, args.kmeans_init, args.n_opt_iter, args.convergence_tol, args.kernel_convergence_tol, args.early_stopping, args.measure_freq, args.z_noise, args.learning_rate, args.kernel_learning_rate, args.feature_selection, args.feature_selection_dims, args.feature_selection_model_path)

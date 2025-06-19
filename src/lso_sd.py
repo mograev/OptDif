@@ -312,6 +312,9 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
                 f"--logfile={str(log_path)}",
                 f"--device={args.device}",
                 "--kmeans_init",
+                f"--feature_selection={args.feature_selection}" if args.feature_selection else "",
+                f"--feature_selection_dims={args.feature_selection_dims}" if args.feature_selection else "",
+                f"--feature_selection_model_path={args.feature_selection_model_path}" if args.feature_selection_model_path else "",
             ]
 
             if pbar is not None:
@@ -376,47 +379,26 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
             pbar.set_description("optimizing acq func")
         _run_command(bo_opt_command, f"Surrogate opt")
 
-    elif args.opt_strategy in ["GBO", "GBO_PCA", "GBO_FI"]:
+    elif args.opt_strategy == "GBO":
 
         # -- 1. Fit surrogate model ------------------------------- #
 
         new_gbo_file = run_folder / f"gbo_train_res.npz"
         log_path = run_folder / f"gbo_train.log"
 
-        if args.opt_strategy == "GBO":
-            gbo_train_command = [
-                "python",
-                GBO_TRAIN_FILE,
-                f"--seed={iter_seed}",
-                f"--data_file={str(data_file)}",
-                f"--save_file={str(new_gbo_file)}",
-                f"--logfile={str(log_path)}",
-                f"--device={args.device}",
-                f"--normalize_input",
-            ]
-        elif args.opt_strategy == "GBO_PCA":
-            gbo_train_command = [
-                "python",
-                GBO_PCA_TRAIN_FILE,
-                f"--seed={iter_seed}",
-                f"--data_file={str(data_file)}",
-                f"--save_file={str(new_gbo_file)}",
-                f"--logfile={str(log_path)}",
-                f"--device={args.device}",
-                f"--n_pca_components={args.n_opt_dims}",
-            ]
-        elif args.opt_strategy == "GBO_FI":
-            gbo_train_command = [
-                "python",
-                GBO_FI_TRAIN_FILE,
-                f"--seed={iter_seed}",
-                f"--data_file={str(data_file)}",
-                f"--save_file={str(new_gbo_file)}",
-                f"--logfile={str(log_path)}",
-                f"--device={args.device}",
-                f"--normalize_input",
-                f"--n_opt_dims={args.n_opt_dims}",
-            ]
+        gbo_train_command = [
+            "python",
+            GBO_TRAIN_FILE,
+            f"--seed={iter_seed}",
+            f"--data_file={str(data_file)}",
+            f"--save_file={str(new_gbo_file)}",
+            f"--logfile={str(log_path)}",
+            f"--device={args.device}",
+            f"--normalize_input",
+            f"--feature_selection={args.feature_selection}" if args.feature_selection else "",
+            f"--feature_selection_dims={args.feature_selection_dims}" if args.feature_selection else "",
+            f"--feature_selection_model_path={args.feature_selection_model_path}" if args.feature_selection_model_path else "",
+        ]
 
         if pbar is not None:
             pbar.set_description("GBO initial fit")
@@ -430,45 +412,20 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
         opt_path = run_folder / f"gbo_opt_res.npz"
         log_path = run_folder / f"gbo_opt.log"
 
-        if args.opt_strategy == "GBO":
-            gbo_opt_command = [
-                "python",
-                GBO_OPT_FILE,
-                f"--seed={iter_seed}",
-                f"--model_file={str(curr_gbo_file)}",
-                f"--save_file={str(opt_path)}",
-                f"--data_file={str(data_file)}",
-                f"--logfile={str(log_path)}",
-                f"--n_starts={args.n_starts}",
-                f"--n_out={str(num_queries_to_do)}",
-                f"--sample_distribution={args.sample_distribution}",
-            ]
-        elif args.opt_strategy == "GBO_PCA":
-            gbo_opt_command = [
-                "python",
-                GBO_PCA_OPT_FILE,
-                f"--seed={iter_seed}",
-                f"--model_file={str(curr_gbo_file)}",
-                f"--data_file={str(data_file)}",
-                f"--save_file={str(opt_path)}",
-                f"--logfile={str(log_path)}",
-                f"--n_starts={args.n_starts}",
-                f"--n_out={str(num_queries_to_do)}",
-                f"--n_pca_components={args.n_opt_dims}",
-            ]
-        elif args.opt_strategy == "GBO_FI":
-            gbo_opt_command = [
-                "python",
-                GBO_FI_OPT_FILE,
-                f"--seed={iter_seed}",
-                f"--model_file={str(curr_gbo_file)}",
-                f"--data_file={str(data_file)}",
-                f"--save_file={str(opt_path)}",
-                f"--logfile={str(log_path)}",
-                f"--n_starts={args.n_starts}",
-                f"--n_out={str(num_queries_to_do)}",
-                f"--n_opt_dims={args.n_opt_dims}",
-            ]
+        gbo_opt_command = [
+            "python",
+            GBO_OPT_FILE,
+            f"--seed={iter_seed}",
+            f"--model_file={str(curr_gbo_file)}",
+            f"--save_file={str(opt_path)}",
+            f"--data_file={str(data_file)}",
+            f"--logfile={str(log_path)}",
+            f"--n_starts={args.n_starts}",
+            f"--n_out={str(num_queries_to_do)}",
+            f"--sample_distribution={args.sample_distribution}",
+            f"--feature_selection={args.feature_selection}" if args.feature_selection else "",
+            f"--feature_selection_dims={args.feature_selection_dims}" if args.feature_selection else "",
+        ]
         
         if pbar is not None:
             pbar.set_description("gradient-based optimization")

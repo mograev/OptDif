@@ -1,11 +1,11 @@
 #!/bin/bash
 
-#SBATCH --job-name=lso_sd_gbo                   # Job name
-#SBATCH --output=logs/lso/gbo_pca_sd_01_%j.out  # Output log file
-#SBATCH --error=logs/lso/gbo_pca_sd_01_%j.err   # Error log file
-#SBATCH --time=4:00:00                          # Maximum runtime (hh:mm:ss)
-#SBATCH --partition=gpu20                       # Partition to submit the job to
-#SBATCH --gres=gpu:1                            # Request GPU resources
+#SBATCH --job-name=lso_gp_pca_sd               # Job name
+#SBATCH --output=logs/lso/gp_pca_sd_01_%j.out  # Output log file
+#SBATCH --error=logs/lso/gp_pca_sd_01_%j.err   # Error log file
+#SBATCH --time=4:00:00                         # Maximum runtime (hh:mm:ss)
+#SBATCH --partition=gpu20                      # Partition to submit the job to
+#SBATCH --gres=gpu:1                           # Request GPU resources
 
 # Device and seed
 device="cuda"
@@ -30,21 +30,27 @@ query_budget=50 #500
 retraining_frequency=5
 n_retrain_epochs=0 #0.1
 n_init_retrain_epochs=0 #1
-result_path="results/debug_13/"
+result_path="results/debug_13" #"results/gp_pca_sd_01/"
 sd_vae_path="models/sd_vae/version_0/huggingface" #"stabilityai/stable-diffusion-3.5-medium"
 predictor_attr_file="models/classifier/celeba_smile/attributes.json"
 predictor_path="models/classifier/celeba_smile/predictor_128_scaled3.pth.tar"
 scaled_predictor=True
 
 # Optimization
-opt_strategy="GBO" # "GBO", "GP", "DNGO"
+opt_strategy="GP" # "GBO", "GP", "DNGO", "GBO_PCA", "GBO_FI"
 feature_selection="PCA" # "PCA", "FI", or None
 feature_selection_dims=512 # 512
 feature_selection_model_path="models/feature_selection/sd_latents_pca_model.pkl"
-sample_distribution="train_data" # "uniform", "normal", or "train_data"
 n_starts=20 #20
+n_samples=1000 # 10000
 n_rand_points=800  #8000
 n_best_points=200 #2000
+sample_distribution="train_data" # "uniform", "normal", or "train_data"
+opt_method="SLSQP"
+opt_constraint_threshold=-100000000 #-1e8
+opt_constraint_strategy="gmm_fit"
+n_gmm_components=10
+sparse_out=True
 
 # Initialize Conda for the current shell
 eval "$(conda shell.bash hook)"
@@ -79,8 +85,14 @@ CUDA_VISIBLE_DEVICES=0 python src/lso_sd.py \
     --feature_selection $feature_selection \
     --feature_selection_dims $feature_selection_dims \
     --feature_selection_model_path $feature_selection_model_path \
-    --sample_distribution $sample_distribution \
     --n_starts $n_starts \
+    --n_samples $n_samples \
     --n_rand_points $n_rand_points \
     --n_best_points $n_best_points \
+    --sample_distribution $sample_distribution \
+    --opt_method $opt_method \
+    --opt_constraint_threshold $opt_constraint_threshold \
+    --opt_constraint_strategy $opt_constraint_strategy \
+    --n_gmm_components $n_gmm_components \
+    --sparse_out $sparse_out \
     "$@"

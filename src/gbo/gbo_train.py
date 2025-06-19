@@ -11,7 +11,9 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
+from sklearn.decomposition import PCA
 
+from src.metrics.feature_importance import compute_feature_importance_from_data, compute_feature_importance_from_model
 from src.gbo.gbo_model import GBOModel
 from src.utils import zero_mean_unit_var_normalization
 
@@ -25,6 +27,10 @@ gbo_train_group.add_argument("--save_file", type=str, required=True, help="path 
 gbo_train_group.add_argument("--device", type=str, default="cpu", help="device to use for training (cpu or cuda)")
 gbo_train_group.add_argument("--normalize_input", action="store_true", help="normalize input data")
 gbo_train_group.add_argument("--normalize_output", action="store_true", help="normalize output data")
+gbo_train_group.add_argument('--feature_selection', type=str, default=None, choices=["PCA", "FI"], help="Feature selection method to use: 'PCA' or 'FI'. If None, no feature selection is applied.")
+gbo_train_group.add_argument('--feature_selection_dims', type=int, default=512, help="Number of (PCA or FI) dimensions to use. If feature_selection is None, this is ignored.")
+gbo_train_group.add_argument('--feature_selection_model_path', type=str, default=None, help="Path to the feature selection model file.")
+
 
 def train_gbo(
     logfile,
@@ -33,6 +39,9 @@ def train_gbo(
     device="cpu",
     normalize_input=True,
     normalize_output=True,
+    feature_selection=None,
+    feature_selection_dims=512,
+    feature_selection_model_path=None,
 ):
     """
     Train the GBO model.
@@ -43,8 +52,12 @@ def train_gbo(
         device (str): Device to use for training (cpu or cuda).
         normalize_input (bool): Whether to normalize the input data.
         normalize_output (bool): Whether to normalize the output data.
+        feature_selection (str): Feature selection method to use ('PCA' or 'FI'). If None, no feature selection is applied.
+        feature_selection_dims (int): Number of dimensions to use for feature selection. Ignored if feature_selection is None.
+        feature_selection_model_path (str): Path to the feature selection model file
     """
 
+    # -- Setup & Load Data ---------------------------------------- #
     # Set up logger
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG) # INFO
@@ -58,8 +71,7 @@ def train_gbo(
     # Reshape the data
     X_train = X_train.reshape(X_train.shape[0], -1)
     y_train = y_train.reshape(y_train.shape[0])
-    logger.info(f"X_train shape: {X_train.shape}")
-    logger.info(f"y_train shape: {y_train.shape}")
+    logger.info(f"X_train shape: {X_train.shape}, y_train shape: {y_train.shape}")
 
     # Data statistics
     logger.debug(f"X_train stats: mean {X_train.mean()}, std {X_train.std()}, min {X_train.min()}, max {X_train.max()}")
@@ -77,6 +89,53 @@ def train_gbo(
         y_train, y_mean, y_std = zero_mean_unit_var_normalization(y_train)
         logger.debug(f"y_train stats after normalization: mean {y_train.mean()}, std {y_train.std()}, min {y_train.min()}, max {y_train.max()}")
 
+    # -- Optional feature selection ------------------------------- #
+    if feature_selection == "PCA":
+        # If model path is provided, load pre-trained PCA model, else fit PCA on the training data
+        if feature_selection_model_path is not None:
+            logger.info(f"Loading pre-trained PCA model from {feature_selection_model_path}")
+            with open(feature_selection_model_path, 'rb') as f:
+                pca = pickle.load(f)
+        else:
+            logger.info(f"Applying PCA with {feature_selection_dims} components")
+            pca = PCA()
+            pca.fit(X_train)
+            logger.info(f"Transformed X_train shape after PCA: {X_train.shape}")
+
+        # Transform the training data using PCA
+        X_train = pca.transform(X_train)
+        
+        # Reduce to feature_selection_dims components
+        if feature_selection_dims < X_train.shape[1]:
+            logger.info(f"Reducing to {feature_selection_dims} PCA components")
+            X_train = X_train[:, :feature_selection_dims]
+
+    elif feature_selection == "FI":
+        # If model path is provided, load pre-trained feature importance model, else compute feature importance
+        if feature_selection_model_path is not None:
+            # load state dict from file
+            logger.info(f"Loading pre-trained feature importance model from {feature_selection_model_path}")
+            with open(feature_selection_model_path, 'rb') as f:
+                feature_importance_model = pickle.load(f)
+            feature_importance = compute_feature_importance_from_model(
+                feature_importance_model, X_train, device=device
+            )
+        else:
+            logger.info(f"Computing feature importance using training data")
+            # Compute feature importance from training data
+            feature_importance = compute_feature_importance_from_data(
+                X_train, y_train, hidden_dims=[128, 64], lr=1e-3, batch_size=64, epochs=100, device=device
+            )
+
+        # Select top feature_selection_dims features based on importance
+        if feature_selection_dims < feature_importance.shape[0]:
+            logger.info(f"Selecting top {feature_selection_dims} features based on importance")
+            top_indices = np.argsort(feature_importance)[-feature_selection_dims:]
+            X_train = X_train[:, top_indices]
+        else:
+            logger.info("Using all features as feature_selection_dims is greater than or equal to the number of features")
+
+    # -- Setup GBO Model ------------------------------------------ #
     # Obtain dimensions
     input_dim = X_train.shape[1]
     output_dim = y_train.shape[1] if len(y_train.shape) > 1 else 1
@@ -84,10 +143,8 @@ def train_gbo(
 
     # Set up the model
     model = GBOModel(input_dim, hidden_dims, output_dim).to(device)
-    # ------------------------------------------------------------------
-    # Quick‑fix: initialise final‑layer bias so that sigmoid(0) * 5 ≈ y_mean.
-    # This keeps the network in the sigmoid’s high‑gradient region and
-    # prevents early saturation/collapse.
+    """Quick-fix: initialise final-layer bias so that sigmoid(0) * 5 ≈ y_mean. This keeps the network
+    in the sigmoid's high-gradient region and prevents early saturation/collapse."""
     with torch.no_grad():
         y_mean = y_train.mean()
         bias_val = torch.logit(torch.tensor(y_mean / 5.0, dtype=torch.float32))
@@ -95,8 +152,8 @@ def train_gbo(
         final_linear.bias.data.fill_(bias_val)
         final_linear.weight.data.zero_()   # optional: avoid initial overshoot
     logger.info(f"Initialised final-layer bias to {bias_val.item():.4f}")
-    # ------------------------------------------------------------------
 
+    # -- Train GBO Model ------------------------------------------ #
     criterion = nn.MSELoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32).unsqueeze(1))
@@ -112,7 +169,6 @@ def train_gbo(
             optimizer.zero_grad()
             pred = model(xb)
 
-            # logger.debug(f"Predictions: {pred}, Targets: {yb}")
             loss = criterion(pred, yb)
             loss.backward()
             optimizer.step()
@@ -125,7 +181,7 @@ def train_gbo(
     end_time = time.time()
     logger.info(f"Model fitting took {end_time - start_time:.2f}s to finish")
 
-    # Save GBO model
+    # -- Save GBO model ------------------------------------------- #
     logger.info("\nSaving GBO model")
     ckpt = {
         'model_state_dict': model.state_dict(),
@@ -134,11 +190,22 @@ def train_gbo(
         'output_dim': output_dim,
         'normalize_input': normalize_input,
         'normalize_output': normalize_output,
-        'X_mean': X_mean,
-        'X_std': X_std,
+        'X_mean': X_mean if normalize_input else None,
+        'X_std': X_std if normalize_input else None,
         'y_mean': y_mean if normalize_output else None,
         'y_std': y_std if normalize_output else None,
     }
+    if feature_selection == "PCA":
+        ckpt.update({
+            'pca_components': pca.components_,
+            'pca_mean': pca.mean_,
+            'pca_explained_variance': pca.explained_variance_,
+        })
+    elif feature_selection == "FI":
+        ckpt.update({
+            'feature_importance': feature_importance
+        })
+
     torch.save(ckpt, save_file)
     logger.info(f"\nSuccessful end of script")
 
@@ -163,4 +230,7 @@ if __name__ == "__main__":
         device=args.device,
         normalize_input=args.normalize_input,
         normalize_output=args.normalize_output,
+        feature_selection=args.feature_selection,
+        feature_selection_dims=args.feature_selection_dims,
+        feature_selection_model_path=args.feature_selection_model_path,
     )
