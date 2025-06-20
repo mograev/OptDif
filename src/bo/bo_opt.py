@@ -493,7 +493,7 @@ def opt_main(args):
             n_gmm_components=args.n_gmm_components,
             sparse_out=args.sparse_out,
             feature_selection=args.feature_selection,
-            opt_indices=opt_indices,
+            opt_indices=opt_indices if args.feature_selection else None,
         )
     elif args.opt_method == "COBYLA" or args.opt_method=="SLSQP":
         latent_pred, ei_vals, latent_grid_init = robust_multi_restart_optimizer(
@@ -511,7 +511,7 @@ def opt_main(args):
             n_gmm_components=args.n_gmm_components,
             sparse_out=args.sparse_out,
             feature_selection=args.feature_selection,
-            opt_indices=opt_indices,
+            opt_indices=opt_indices if args.feature_selection else None,
         )
     else:
         raise NotImplementedError(args.opt_method)
@@ -522,11 +522,14 @@ def opt_main(args):
 
     # Make some gp predictions in the log file
     logger.info(f"EI results: {ei_vals}")
+    latent_ei_pred = latent_pred.copy()
+    if args.feature_selection == "PCA" or args.feature_selection == "FI":
+        # If feature selection is applied, filter the latent predictions
+        latent_ei_pred = latent_ei_pred[:, opt_indices]
     if args.surrogate_type == "GP":
-        latent_pred_tensor = torch.tensor(latent_pred[:, opt_indices], dtype=torch.float32)
-        mu, var = surrogate.predict(latent_pred_tensor)
+        mu, var = surrogate.predict(torch.tensor(latent_ei_pred, dtype=torch.float32))
     elif args.surrogate_type == "DNGO":
-        mu, var = surrogate.predict(latent_pred[:, opt_indices])
+        mu, var = surrogate.predict(latent_ei_pred)
     logger.info(f"mu at points: {list(mu.ravel())}")
     logger.info(f"var at points: {list(var.ravel())}")
 

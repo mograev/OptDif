@@ -125,10 +125,10 @@ def opt_gbo(
     # Store init latent grid for analysis
     latent_grid_init = latent_grid.cpu().numpy().copy()
     logger.debug(f"latent_grid_init shape: {latent_grid_init.shape}")
-    logger.debug(f"opt indices: {opt_indices}")
 
     # Optional dim reduction through feature selection
     if feature_selection == "PCA" or feature_selection == "FI":
+        logger.debug(f"opt indices: {opt_indices}")
         assert opt_indices is not None, "opt_indices must be provided when feature_selection is 'PCA' or 'FI'"
         latent_grid = latent_grid[:, opt_indices]
         X_train = X_train[:, opt_indices]

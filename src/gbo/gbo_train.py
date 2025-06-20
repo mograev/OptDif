@@ -159,6 +159,12 @@ def train_gbo(
     dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32).unsqueeze(1))
     loader = DataLoader(dataset, batch_size=32, shuffle=True)
 
+    # Early stopping parameters
+    best_loss = float('inf')
+    no_improve = 0
+    patience = 30  # stop if no improvement in this many steps
+    improve_margin = 1e-4  # minimum improvement to count as progress
+
     # Train the model
     logger.info("Start model fitting")
     start_time = time.time()
@@ -173,11 +179,19 @@ def train_gbo(
             loss.backward()
             optimizer.step()
 
+        # Check for improvement
+        current = loss.item()
+        if current < best_loss - improve_margin:
+            best_loss = current
+            no_improve = 0
+        else:
+            no_improve += 1
+        if no_improve >= patience:
+            logger.info(f"Early stopping at epoch {epoch}, no improvement for {patience} epochs.")
+            break
+
         if epoch % 10 == 0:
             logger.info(f"Epoch {epoch}, Loss: {loss.item():.6f}")
-            if loss.item() < 1e-4:
-                logger.info(f"Early stopping, Loss {loss.item():.6f} is below threshold")
-                break
     end_time = time.time()
     logger.info(f"Model fitting took {end_time - start_time:.2f}s to finish")
 

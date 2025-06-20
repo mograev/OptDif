@@ -27,8 +27,7 @@ from src.dataloader.utils import SimpleFilenameToTensorDataset
 from src.dataloader.weighting import DataWeighter
 from src.classification.smile_classifier import SmileClassifier
 from src.models.latent_models import LatentVQVAE, LatentVQVAE2
-from src.utils import SubmissivePlProgressbar
-from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE, ENTMOOT_TRAIN_OPT_FILE, GBO_FI_TRAIN_FILE, GBO_FI_OPT_FILE
+from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE, ENTMOOT_TRAIN_OPT_FILE
 
 
 # Weighted Retraining arguments
@@ -367,10 +366,14 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
                 f"--logfile={str(log_path)}",
                 f"--device={args.device}",
                 "--kmeans_init",
-                f"--feature_selection={args.feature_selection}" if args.feature_selection else "",
-                f"--feature_selection_dims={args.feature_selection_dims}" if args.feature_selection else "",
-                f"--feature_selection_model_path={args.feature_selection_model_path}" if args.feature_selection_model_path else "",
             ]
+
+            # Append feature selection arguments if specified
+            if args.feature_selection is not None:
+                gp_train_command.append(f"--feature_selection={args.feature_selection}")
+                gp_train_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
+                if args.feature_selection_model_path is not None:
+                    gp_train_command.append(f"--feature_selection_model_path={args.feature_selection_model_path}")
 
             if pbar is not None:
                 pbar.set_description("GP initial fit")
@@ -386,11 +389,15 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
                 f"--data_file={str(data_file)}",
                 f"--save_file={str(new_bo_file)}",
                 f"--logfile={str(log_path)}",
-                f"--feature_selection={args.feature_selection}" if args.feature_selection else "",
-                f"--feature_selection_dims={args.feature_selection_dims}" if args.feature_selection else "",
-                f"--feature_selection_model_path={args.feature_selection_model_path}" if args.feature_selection_model_path else "",
                 f"--device={args.device}",
             ]
+
+            # Append feature selection arguments if specified
+            if args.feature_selection is not None:
+                dngo_train_command.append(f"--feature_selection={args.feature_selection}")
+                dngo_train_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
+                if args.feature_selection_model_path is not None:
+                    dngo_train_command.append(f"--feature_selection_model_path={args.feature_selection_model_path}")
 
             if pbar is not None:
                 pbar.set_description("DNGO initial fit")
@@ -450,10 +457,14 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
             f"--logfile={str(log_path)}",
             f"--device={args.device}",
             f"--normalize_input",
-            f"--feature_selection={args.feature_selection}" if args.feature_selection else "",
-            f"--feature_selection_dims={args.feature_selection_dims}" if args.feature_selection else "",
-            f"--feature_selection_model_path={args.feature_selection_model_path}" if args.feature_selection_model_path else "",
         ]
+
+        # Append feature selection arguments if specified
+        if args.feature_selection is not None:
+            gbo_train_command.append(f"--feature_selection={args.feature_selection}")
+            gbo_train_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
+            if args.feature_selection_model_path is not None:
+                gbo_train_command.append(f"--feature_selection_model_path={args.feature_selection_model_path}")
 
         if pbar is not None:
             pbar.set_description("GBO initial fit")
@@ -478,9 +489,11 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
             f"--n_starts={args.n_starts}",
             f"--n_out={str(num_queries_to_do)}",
             f"--sample_distribution={args.sample_distribution}",
-            f"--feature_selection={args.feature_selection}" if args.feature_selection else "",
-            f"--feature_selection_dims={args.feature_selection_dims}" if args.feature_selection else "",
-        ]      
+        ]
+
+        if args.feature_selection is not None:
+            gbo_opt_command.append(f"--feature_selection={args.feature_selection}")
+            gbo_opt_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
 
         if pbar is not None:
             pbar.set_description("gradient-based optimization")
