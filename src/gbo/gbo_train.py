@@ -230,8 +230,6 @@ def train_gbo(
     
 
 if __name__ == "__main__":
-
-    print("Arrived at training")
     
     args = parser.parse_args()
 

@@ -158,7 +158,7 @@ def opt_gbo(
 
         # Optimizer setup
         optimizer = torch.optim.Adam([z], lr=1e-3)
-        n_steps = 3000
+        n_steps = 10000
 
         # Adaptive ALM setup
         R = z.shape[1] ** 0.5
