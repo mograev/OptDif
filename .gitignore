@@ -27,3 +27,4 @@ __pycache__/
 logs/
 *.cache
 .ipynb_checkpoints
+src/ctrloralter/checkpoints/
