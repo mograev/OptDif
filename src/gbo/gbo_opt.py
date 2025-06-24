@@ -108,8 +108,8 @@ def opt_gbo(
     # -- Initialize latent grid ----------------------------------- #
     if sample_distribution == "train_data":
         logger.info("Sampling from training data distribution")
-        indices = np.random.choice(X_train.shape[0], size=n_starts)
-        latent_grid = torch.tensor(X_train[indices], device=device, dtype=torch.float32)
+        init_indices = np.random.choice(X_train.shape[0], size=n_starts)
+        latent_grid = torch.tensor(X_train[init_indices], device=device, dtype=torch.float32)
 
     elif sample_distribution == "uniform":
         logger.info("Sampling from uniform distribution")
@@ -158,7 +158,13 @@ def opt_gbo(
 
         # Optimizer setup
         optimizer = torch.optim.Adam([z], lr=1e-3)
-        n_steps = 10000
+        n_steps = 10_000
+
+        # Early stopping parameters
+        best_score = float('-inf')
+        no_improve = 0
+        patience = 1_000
+        improve_margin = 1e-3
 
         # Adaptive ALM setup
         R = z.shape[1] ** 0.5
@@ -173,6 +179,18 @@ def opt_gbo(
         for step in range(n_steps):
             optimizer.zero_grad()
             score = model(z)
+
+            # Check for early stopping
+            with torch.no_grad():
+                current_score = score.item()
+                if current_score > best_score + improve_margin:
+                    best_score = current_score
+                    no_improve = 0
+                else:
+                    no_improve += 1
+                if no_improve >= patience:
+                    logger.info(f"Early stopping at step {step} with score {current_score:.6f} (no improvement for {patience} steps)")
+                    break
 
             # Compute constraint and loss at current z
             g_norm = torch.norm(z) - R           # signed constraint value
@@ -246,6 +264,7 @@ def opt_gbo(
     # Filter top n_out
     latent_pred = latent_pred[top_indices]
     latent_grid_init = latent_grid_init[top_indices]
+    init_indices = init_indices[top_indices] if sample_distribution == "train_data" else None
 
     # Ensure the output is float32
     latent_pred = latent_pred.astype(np.float32)
@@ -281,6 +300,7 @@ def opt_gbo(
         save_file,
         z_opt=latent_pred,
         z_init=latent_grid_init,
+        z_indices=init_indices,
     )
 
     # Clean up GPU

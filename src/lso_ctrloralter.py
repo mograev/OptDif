@@ -424,9 +424,10 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
     results = np.load(opt_path, allow_pickle=True)
     z_opt = results["z_opt"]
     z_init = results.get("z_init", None)
+    z_indices = results.get("z_indices", None)
     
     # Decode point
-    x_new, y_new = _decode_and_predict(
+    x_opt, y_opt = _decode_and_predict(
         sd_model,
         predictor,
         torch.as_tensor(z_opt, device=device),
@@ -434,14 +435,22 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
     )
 
     # Decode initial points if available
-    x_new_init = None
+    x_init = None
     if z_init is not None:
-        x_new_init, _ = _decode_and_predict(
+        # Decode initial points
+        x_init, y_init = _decode_and_predict(
             sd_model,
             predictor,
             torch.as_tensor(z_init, device=device),
             device
         )
+
+    # Derive original images from initial indices
+    # Only applicable if initial points are sampled from the training data
+    x_orig = None
+    if args.sample_distribution == "train_data" and z_indices is not None:
+        x_orig = [temp_dataset[int(idx)] for idx in z_indices]
+        y_orig = [targets[int(idx)] for idx in z_indices]
 
     # Reset pbar description
     if pbar is not None:
@@ -449,14 +458,16 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
 
         # Update best point in progress bar
         if postfix is not None:
-            postfix["best"] = max(postfix["best"], float(max(y_new)))
+            postfix["best"] = max(postfix["best"], float(max(y_opt)))
             pbar.set_postfix(postfix)
 
     # Return data points
-    if x_new_init is not None:
-        return (x_new, y_new, z_opt, x_new_init)
+    if x_init is not None and x_orig is not None:
+        return (x_opt, y_opt, z_opt, x_init, y_init, x_orig, y_orig)
+    elif x_init is not None:
+        return (x_opt, y_opt, z_opt, x_init, y_init)
     else:
-        return (x_new, y_new, z_opt)
+        return (x_opt, y_opt, z_opt)
 
 
 def main_loop(args):
@@ -501,7 +512,7 @@ def main_loop(args):
                 "cfg": True,
                 "transforms": [],
                 "config": {
-                    "lora_scale": 3.0,
+                    "lora_scale": 1,
                     "rank": 160,
                     "c_dim": 1024,
                     "adaption_mode": "only_cross",
@@ -538,9 +549,9 @@ def main_loop(args):
 
     # Set up results tracking
     results = dict(
-        opt_points=[],  # saves (default: 5) optimal points in the original input space for each retraining iteration
         opt_point_properties=[], # saves corresponding function evaluations
-        opt_latent_points=[], # saves corresponding latent points
+        init_point_properties=[], # saves initial point properties if available
+        orig_point_properties=[], # saves original point properties if available
         opt_model_version=[],
         params=str(sys.argv),
     )
@@ -610,11 +621,16 @@ def main_loop(args):
                 postfix=postfix,
             )
 
-            if len(lso_results) == 4:
-                x_new, y_new, z_query, x_new_init = lso_results
+
+            if len(lso_results) == 7:
+                x_opt, y_opt, z_opt, x_init, y_init, x_orig, y_orig = lso_results
+            elif len(lso_results) == 5:
+                x_opt, y_opt, z_opt, x_init, y_init = lso_results
+                x_orig, y_orig = None, None
             else:
-                x_new, y_new, z_query = lso_results
-                x_new_init = None
+                x_opt, y_opt, z_opt = lso_results
+                x_init, y_init = None, None
+                x_orig, y_orig = None, None
 
             # Create a new directory for the sampled data
             curr_samples_dir = Path(samples_dir) / f"iter_{samples_so_far}"
@@ -622,7 +638,7 @@ def main_loop(args):
 
             # Save the new latent points
             os.makedirs(curr_samples_dir / "latents")
-            for i, z in enumerate(z_query):
+            for i, z in enumerate(z_opt):
                 if not isinstance(z, torch.Tensor):
                     z = torch.from_numpy(z)
                 torch.save(z, str(Path(curr_samples_dir) / f"latents/tensor_{i}.pt"), pickle_protocol=pickle.HIGHEST_PROTOCOL)
@@ -630,32 +646,40 @@ def main_loop(args):
             # Save the new images
             new_filename_list = []
             os.makedirs(curr_samples_dir / "img_tensor")
-            for i, x in enumerate(x_new):
+            for i, x in enumerate(x_opt):
                 if not isinstance(x, torch.Tensor):
                     x = torch.from_numpy(x)
                 torch.save(x, str(Path(curr_samples_dir) / f"img_tensor/tensor_{i}.pt"), pickle_protocol=pickle.HIGHEST_PROTOCOL)
                 new_filename_list.append(str(Path(curr_samples_dir) / f"img_tensor/tensor_{i}.pt"))
 
             # Save initial points if available
-            if x_new_init is not None:
+            if x_init is not None:
                 os.makedirs(curr_samples_dir / "img_tensor_init")
-                for i, x in enumerate(x_new_init):
+                for i, x in enumerate(x_init):
                     if not isinstance(x, torch.Tensor):
                         x = torch.from_numpy(x)
                     torch.save(x, str(Path(curr_samples_dir) / f"img_tensor_init/tensor_{i}.pt"), pickle_protocol=pickle.HIGHEST_PROTOCOL)
             
+            # Save original images if available
+            if x_orig is not None:
+                os.makedirs(curr_samples_dir / "img_tensor_orig")
+                for i, x in enumerate(x_orig):
+                    if not isinstance(x, torch.Tensor):
+                        x = torch.from_numpy(x)
+                    torch.save(x, str(Path(curr_samples_dir) / f"img_tensor_orig/tensor_{i}.pt"), pickle_protocol=pickle.HIGHEST_PROTOCOL)
+
             # Append new points to dataset and adapt weighting
-            datamodule.append_train_data(new_filename_list, y_new)
+            datamodule.append_train_data(new_filename_list, y_opt)
 
             # Save results
-            results["opt_latent_points"] += [z for z in z_query]
-            results["opt_points"] += [x.detach().numpy() for x in x_new]
-            results["opt_point_properties"] += [y for y in y_new]
-            results["opt_model_version"] += [ret_idx] * len(x_new)
+            results["opt_point_properties"] += [y for y in y_opt]
+            results["init_point_properties"] += [y for y in y_init] if y_init is not None else []
+            results["orig_point_properties"] += [y for y in y_orig] if y_orig is not None else []
+            results["opt_model_version"] += [ret_idx] * len(x_opt)
             np.savez_compressed(str(result_dir / "results.npz"), **results)
 
             # Final update of progress bar
-            postfix["best"] = max(postfix["best"], float(y_new.max()))
+            postfix["best"] = max(postfix["best"], float(y_opt.max()))
             postfix["n_train"] = len(datamodule.data_train)
             pbar.set_postfix(postfix)
             pbar.update(n=num_queries_to_do)

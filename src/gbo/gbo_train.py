@@ -6,6 +6,7 @@ import logging
 import argparse
 import pickle
 import time
+from itertools import cycle, islice
 
 import numpy as np
 import torch
@@ -158,42 +159,52 @@ def train_gbo(
     optimizer = torch.optim.Adam(model.parameters(), lr=1e-3)
     dataset = TensorDataset(torch.tensor(X_train, dtype=torch.float32), torch.tensor(y_train, dtype=torch.float32).unsqueeze(1))
     loader = DataLoader(dataset, batch_size=32, shuffle=True)
+    n_steps = 100_000
 
     # Early stopping parameters
     best_loss = float('inf')
     no_improve = 0
-    patience = 30  # stop if no improvement in this many steps
-    improve_margin = 1e-4  # minimum improvement to count as progress
+    patience = 1_000  # stop if no improvement in this many steps
 
-    # Train the model
+    # Store best model state
+    best_model_state = model.state_dict()
+
+    # Train the model with a fixed number of steps
     logger.info("Start model fitting")
     start_time = time.time()
     model.train()
-    for epoch in range(1000):
-        for xb, yb in loader:
-            xb, yb = xb.to(device), yb.to(device)
-            optimizer.zero_grad()
-            pred = model(xb)
+    step = 0
+    for xb, yb in islice(cycle(loader), n_steps):
+        step += 1
+        xb, yb = xb.to(device), yb.to(device)
+        optimizer.zero_grad()
+        pred = model(xb)
+        loss = criterion(pred, yb)
+        loss.backward()
+        optimizer.step()
 
-            loss = criterion(pred, yb)
-            loss.backward()
-            optimizer.step()
-
-        # Check for improvement
         current = loss.item()
-        if current < best_loss - improve_margin:
+        # Early stopping & model checkpointing
+        if current < best_loss:
+            logger.info(f"Step {step}, Loss improved: {current:.6f} (previous best: {best_loss:.6f})")
+            best_model_state = model.state_dict()  # save the best model state
             best_loss = current
             no_improve = 0
         else:
             no_improve += 1
         if no_improve >= patience:
-            logger.info(f"Early stopping at epoch {epoch}, no improvement for {patience} epochs.")
+            logger.info(f"Early stopping at step {step}, no improvement for {patience} steps.")
             break
 
-        if epoch % 10 == 0:
-            logger.info(f"Epoch {epoch}, Loss: {loss.item():.6f}")
+        # Periodic logging
+        if step % 100 == 0:
+            logger.info(f"Step {step}, Loss: {current:.6f}")
+
     end_time = time.time()
     logger.info(f"Model fitting took {end_time - start_time:.2f}s to finish")
+
+    # Load the best model state
+    model.load_state_dict(best_model_state)
 
     # -- Save GBO model ------------------------------------------- #
     logger.info("\nSaving GBO model")

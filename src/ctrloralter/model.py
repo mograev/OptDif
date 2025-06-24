@@ -574,42 +574,6 @@ class SD15(ModelBase):
         return phi
 
     @torch.no_grad()
-    def sample_from_phi(
-        self,
-        phi: torch.Tensor,
-        generator: torch.Generator | None = None,
-        cfg_mask: list[bool] | None = None,
-    ) -> list:
-        """
-        Generate images directly from a precomputed phi fingerprint.
-        Args:
-            phi: Tensor of shape [batch_size, phi_dim] containing the shared LoRA style vectors.
-            generator: Optional torch.Generator for reproducible sampling.
-            cfg_mask: Optional list of booleans for CFG dropout.
-            skip_encode: If True, skips encoder (phi assumed post-mapper).
-        Returns:
-            A list of PIL images.
-        """
-        # 1. Prepare cs list: a single branch carrying phi
-        cs = [phi.to(self.unet.device)]
-
-        # 2. Set the phi batch on each DataProvider
-        for dp in self.dps:
-            dp.set_batch(cs[0])
-
-        # 3. Call the custom sampler with no text prompt
-        images = self.sample_custom(
-            prompt="",
-            num_images_per_prompt=phi.shape[0],
-            cs=cs,
-            generator=generator,
-            cfg_mask=cfg_mask,
-            skip_encode=True,
-            skip_mapping=True,  # phi is already post-mapper
-        )
-        return images
-
-    @torch.no_grad()
     def sample_custom(
         self,
         prompt,
@@ -618,12 +582,22 @@ class SD15(ModelBase):
         generator,
         cfg_mask: list[bool] | None = None,
         prompt_offset_step: int = 0,
-        skip_encode: bool = False,
-        skip_mapping: bool = False,
+        skip_encode: list[int] | bool = False,
+        skip_mapping: list[int] | bool = False,
         **kwargs,
     ):
         height = self.unet.config.sample_size * self.pipe.vae_scale_factor
         width = self.unet.config.sample_size * self.pipe.vae_scale_factor
+
+        # Hande skip_encode and skip_mapping
+        if isinstance(skip_encode, bool):
+            skip_encode_branches = list(range(len(self.encoders))) if skip_encode else []
+        elif isinstance(skip_encode, list):
+            skip_encode_branches = skip_encode
+        if isinstance(skip_mapping, bool):
+            skip_mapping_branches = list(range(len(self.mappers))) if skip_mapping else []
+        elif isinstance(skip_mapping, list):
+            skip_mapping_branches = skip_mapping
 
         if prompt is not None and isinstance(prompt, str):
             batch_size = 1
@@ -658,12 +632,12 @@ class SD15(ModelBase):
             else:
                 c = torch.cat([neg_c, c])
 
-            if skip_encode:
+            if i in skip_encode_branches:
                 cond = c
             else:
                 cond = encoder(c)
 
-            if skip_mapping:
+            if i in skip_mapping_branches:
                 mapped_cond = cond
             else:
                 mapped_cond = mapper(cond)
@@ -717,8 +691,6 @@ class SD15(ModelBase):
         image = self.pipe.image_processor.postprocess(image, output_type="pil", do_denormalize=do_denormalize)
 
         return image
-
-        # with self.progress_bar(total=num_inference_steps) as progress_bar:
 
     @torch.no_grad()
     def sample(self, *args, **kwargs):
