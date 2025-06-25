@@ -148,7 +148,14 @@ def _decode_and_predict(sd_model, predictor, z, device):
             latents = z[j: j + batch_size].to(device)
 
             # Sample image from latents
-            sampled_images = sd_model.sample_from_phi(latents)
+            sampled_images = sd_model.sample_custom(
+                prompt="",
+                num_images_per_prompt=latents.shape[0],
+                cs=[latents],
+                generator=None,
+                skip_encode=True,
+                skip_mapping=True,
+            )
 
             # convert PIL images to tensor batch
             img_tensors = torch.stack([
@@ -194,6 +201,7 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
     img_tensor_dir = datamodule.mode_dirs["img_tensor"]
     temp_dataset = SimpleFilenameToTensorDataset(filenames, img_tensor_dir)
     targets = datamodule.attr_train[chosen_indices]
+    temp_targets = torch.tensor(targets, dtype=torch.float32)
 
     # Create a dataloader for the chosen points
     temp_dataloader = DataLoader(
@@ -450,7 +458,7 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
     x_orig = None
     if args.sample_distribution == "train_data" and z_indices is not None:
         x_orig = [temp_dataset[int(idx)] for idx in z_indices]
-        y_orig = [targets[int(idx)] for idx in z_indices]
+        y_orig = [temp_targets[int(idx)] for idx in z_indices]
 
     # Reset pbar description
     if pbar is not None:

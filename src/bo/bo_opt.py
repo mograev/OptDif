@@ -221,7 +221,8 @@ def robust_multi_restart_optimizer(
     elif sample_distribution == "normal":
         latent_grid = np.random.normal(loc=0.0, scale=0.25, size=(n_samples, X_train.shape[1]))
     elif sample_distribution == "train_data":
-        latent_grid = X_train[np.random.choice(X_train.shape[0], n_samples, replace=True)]
+        init_indices = np.random.choice(X_train.shape[0], size=n_samples, replace=True)
+        latent_grid = X_train[init_indices]
     else:
         raise NotImplementedError(sample_distribution)
 
@@ -254,6 +255,7 @@ def robust_multi_restart_optimizer(
         gmm = GaussianMixture(n_components=n_gmm_components, random_state=0, covariance_type="full", max_iter=2000, tol=1e-3).fit(X_train)
         logger.debug(f"GMM fitted with {n_gmm_components} components. Now scoring the latent grid.")
         logdens_z_grid = gmm.score_samples(latent_grid)
+        logger.debug(f"Log-density shape: {logdens_z_grid.shape}")
 
         # Log the shape and stats of the log-density
         logger.debug(
@@ -269,6 +271,7 @@ def robust_multi_restart_optimizer(
 
         # Reduce intial grid accordingly
         latent_grid_init = latent_grid_init[np.where(logdens_z_grid > opt_constraint_threshold)[0]]
+        init_indices = init_indices[np.where(logdens_z_grid > opt_constraint_threshold)[0]] if init_indices is not None else None
     else:
         raise NotImplementedError(opt_constraint_strategy)
     
@@ -286,6 +289,7 @@ def robust_multi_restart_optimizer(
 
     z_valid_sorted = z_valid[z_valid_prop_argsort]
     latent_grid_init = latent_grid_init[z_valid_prop_argsort]
+    init_indices = init_indices[z_valid_prop_argsort] if init_indices is not None else None
 
     # -- Optimization loop ---------------------------------------- #
     # Wrapper for functions, that handles array flattening and dtype changing
@@ -382,6 +386,7 @@ def robust_multi_restart_optimizer(
     opt_vals_candidates = np.array([res.fun for _, res in sorted_pairs])
     # Align fixed components
     latent_grid_init = latent_grid_init[indices]
+    init_indices = init_indices[indices] if init_indices is not None else None
 
     if feature_selection == "PCA" or feature_selection == "FI":
         # Merge the fixed indices back into the candidates
@@ -396,11 +401,19 @@ def robust_multi_restart_optimizer(
         latent_pred, sparse_indexes = sparse_subset(latent_pred, 0.01)
         opt_vals_candidates = opt_vals_candidates[sparse_indexes]
         latent_grid_init = latent_grid_init[sparse_indexes]
+        init_indices = init_indices[sparse_indexes] if init_indices is not None else None
+
+    # Limit the number of points to return
+    if num_pts_to_return is not None:
+        latent_pred = latent_pred[:num_pts_to_return]
+        opt_vals_candidates = opt_vals_candidates[:num_pts_to_return]
+        latent_grid_init = latent_grid_init[:num_pts_to_return]
+        init_indices = init_indices[:num_pts_to_return] if init_indices is not None else None
 
     if logger is not None:
-            logger.info(f"Sampled points: {latent_pred[:num_pts_to_return]}")
+            logger.info(f"Sampled points: {latent_pred}")
 
-    return latent_pred[:num_pts_to_return], opt_vals_candidates[:num_pts_to_return], latent_grid_init[:num_pts_to_return]
+    return latent_pred, opt_vals_candidates, latent_grid_init, init_indices
 
 
 def opt_main(args):
@@ -478,7 +491,7 @@ def opt_main(args):
     logger.info("\n### Starting optimization ### \n")
 
     if args.opt_method == "L-BFGS-B":
-        latent_pred, ei_vals, latent_grid_init = robust_multi_restart_optimizer(
+        latent_pred, ei_vals, latent_grid_init, init_indices = robust_multi_restart_optimizer(
             functools.partial(neg_ei_and_grad, surrogate=surrogate, fmin=fmin, surrogate_type=args.surrogate_type),
             X_train,
             args.opt_method,
@@ -496,7 +509,7 @@ def opt_main(args):
             opt_indices=opt_indices if args.feature_selection else None,
         )
     elif args.opt_method == "COBYLA" or args.opt_method=="SLSQP":
-        latent_pred, ei_vals, latent_grid_init = robust_multi_restart_optimizer(
+        latent_pred, ei_vals, latent_grid_init, init_indices = robust_multi_restart_optimizer(
             functools.partial(neg_ei, surrogate=surrogate, fmin=fmin, surrogate_type=args.surrogate_type),
             X_train,
             args.opt_method,
@@ -551,8 +564,9 @@ def opt_main(args):
     # Save results
     np.savez_compressed(
         args.save_file,
+        z_opt=latent_pred,
         z_init=latent_grid_init,
-        z_opt=latent_pred
+        z_indices=init_indices,
     )
     
     logger.info("\nEnd of Script.")
