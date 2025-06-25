@@ -1012,6 +1012,22 @@ class LatentVQVAE2(LatentModel):
         self.decoder_top    = Decoder(**top_cfg)     # Upsamples top code to bottom res.
         self.decoder_bottom = Decoder(**bottom_cfg)  # Final reconstruction
 
+        # -- Latent Dimensions ------------------------------------ #
+        # Get parameters from the config
+        embed_dim_bottom = bottom_cfg["embed_dim"]
+        embed_dim_top    = top_cfg["embed_dim"]
+        z_channels_bottom = bottom_cfg["z_channels"]
+        z_channels_top    = top_cfg["z_channels"]
+        # Calculate bottleneck spatial dimensions
+        bottleneck_resolution_bottom = bottom_cfg["resolution"] // (2 ** (len(bottom_cfg["ch_mult"]) - 1))
+        bottleneck_resolution_top    = top_cfg["resolution"] // (2 ** (len(top_cfg["ch_mult"]) - 1))
+        assert bottleneck_resolution_bottom * bottleneck_resolution_bottom == embed_dim_bottom, \
+            f"`embed_dim_bottom` ({embed_dim_bottom}) must be equal to bottleneck_resolution_bottom^2"
+        assert bottleneck_resolution_top * bottleneck_resolution_top == embed_dim_top, \
+            f"`embed_dim_top` ({embed_dim_top}) must be equal to bottleneck_resolution_top^2"
+        self.latent_dim_bottom = (bottleneck_resolution_bottom, bottleneck_resolution_bottom, z_channels_bottom)
+        self.latent_dim_top    = (bottleneck_resolution_top, bottleneck_resolution_top, z_channels_top)
+
         # -- Vector‑Quantizers ------------------------------------ #
         # Top level
         self.quant_conv_top = torch.nn.Conv2d(top_cfg["z_channels"], top_cfg["z_channels"], 1)
@@ -1090,9 +1106,9 @@ class LatentVQVAE2(LatentModel):
         if code_t.dim() == 1:
             # If code_t is a single vector, reshape it to (1, embed_dim)
             code_t = code_t.unsqueeze(0)
-
-        quant_b = self.quantize_bottom.get_codebook_entry(code_b, shape=(code_b.shape[0], *self.quantize_bottom.latent_dim))
-        quant_t = self.quantize_top.get_codebook_entry(code_t, shape=(code_t.shape[0], *self.quantize_top.latent_dim))
+        
+        quant_b = self.quantize_bottom.get_codebook_entry(code_b, shape=(code_b.shape[0], *self.latent_dim_bottom))
+        quant_t = self.quantize_top.get_codebook_entry(code_t, shape=(code_t.shape[0], *self.latent_dim_top))
         dec = self.decode(quant_b, quant_t)
         return dec
 
