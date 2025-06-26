@@ -107,6 +107,114 @@ class ARTransformer(nn.Module):
 
 
 
+class GridTransformer(nn.Module):
+    """
+    GPT-style causal Transformer that leverages 2D grid positional embeddings.
+    Processes flattened grid tokens (H*W) but uses separate row/column embeddings.
+    """
+    def __init__(
+        self,
+        vocab_size: int,
+        height: int,
+        width: int,
+        d_model: int = 512,
+        n_layers: int = 8,
+        n_heads: int = 8,
+        dropout: float = 0.0,
+    ):
+        """
+        Initialize the GridTransformer.
+        Args:
+            vocab_size: Number of discrete tokens (e.g. VQ codes).
+            height: Height of the grid.
+            width: Width of the grid.
+            d_model: Embedding / hidden size.
+            n_layers: Number of TransformerEncoder layers.
+            n_heads: Number of attention heads in each layer.
+            dropout: Dropout rate for the Transformer layers.
+        """
+        super().__init__()
+        self.height = height
+        self.width = width
+        self.seq_len = height * width
+        # token and 2D positional embeddings
+        self.tok_emb = nn.Embedding(vocab_size, d_model)
+        self.row_emb = nn.Embedding(height, d_model)
+        self.col_emb = nn.Embedding(width, d_model)
+
+        # transformer encoder stack
+        enc_layer = nn.TransformerEncoderLayer(
+            d_model=d_model,
+            nhead=n_heads,
+            dim_feedforward=d_model * 4,
+            batch_first=True,
+            dropout=dropout,
+        )
+        self.tr = nn.TransformerEncoder(enc_layer, n_layers)
+        self.head = nn.Linear(d_model, vocab_size, bias=False)
+
+        # causal mask over flattened sequence
+        self.register_buffer(
+            "_causal_mask",
+            torch.triu(torch.ones(self.seq_len, self.seq_len) * float("-inf"), diagonal=1),
+            persistent=False,
+        )
+
+    def forward(self, idx: torch.LongTensor):
+        """
+        Forward pass.
+        Args:
+            idx: Flattened grid token indices, shape (B, seq_len).
+        Returns:
+            logits: Shape (B, seq_len, vocab_size).
+        """
+        B, L = idx.shape
+        if L > self.seq_len:
+            raise ValueError(f"sequence length {L} > configured {self.seq_len}")
+
+        # embed tokens (flattened)
+        tok = self.tok_emb(idx)  # (B, L, D)
+
+        # compute 2D positional embeddings for first L positions
+        positions = torch.arange(L, device=idx.device)
+        rows = positions // self.width
+        cols = positions % self.width
+        pos_flat = self.row_emb(rows) + self.col_emb(cols)  # (L, D)
+
+        # combine token + pos, apply transformer with causal mask
+        h = tok + pos_flat.unsqueeze(0)  # (B, L, D)
+        h = self.tr(h, mask=self._causal_mask[:L, :L])
+
+        return self.head(h)
+
+    @torch.no_grad()
+    def generate(self, prefix: torch.LongTensor, temperature: float = 1.0, top_k: int | None = None):
+        """
+        Autoregressive sampling for GridTransformer.
+        Args:
+            prefix: Initial sequence of token indices, shape (B, cur_len).
+            temperature: Softmax temperature.
+            top_k: If specified, use top-k sampling.
+        Returns:
+            seq: Generated full sequence of shape (B, self.seq_len).
+        """
+        B, cur = prefix.shape
+        device = prefix.device
+        # Initialize sequence with zeros
+        seq = torch.zeros((B, self.seq_len), dtype=torch.long, device=device)
+        seq[:, :cur] = prefix
+        # Autoregressively generate tokens
+        for t in range(cur, self.seq_len):
+            logits = self(seq[:, : t + 1])[:, -1] / temperature  # (B, vocab)
+            if top_k is not None:
+                v, _ = torch.topk(logits, top_k)
+                logits[logits < v[:, [-1]]] = -float("inf")
+            probs = torch.softmax(logits, dim=-1)
+            next_tok = torch.multinomial(probs, 1).squeeze(-1)
+            seq[:, t] = next_tok
+        return seq
+
+
 class HierarchicalTransformerPrior(pl.LightningModule):
     """
     Two-stage Transformer prior (top-level + bottom-level) for LatentVQVAE-2.
@@ -152,9 +260,17 @@ class HierarchicalTransformerPrior(pl.LightningModule):
 
         # Setup AR Transformers
         # Top-level Transformer over top-level codes (fixed length)
-        self.top_prior = ARTransformer(
+        # self.top_prior = ARTransformer(
+        #     vocab_size=self.top_vocab,
+        #     seq_len=self.top_len,
+        #     d_model=d_model,
+        #     n_layers=n_layers,
+        #     n_heads=n_heads,
+        # )
+        self.top_prior = GridTransformer(
             vocab_size=self.top_vocab,
-            seq_len=self.top_len,
+            height=top_res,
+            width=top_res,
             d_model=d_model,
             n_layers=n_layers,
             n_heads=n_heads,
@@ -335,3 +451,4 @@ class HierarchicalTransformerPrior(pl.LightningModule):
         # -- 3) decode -------------------------------------------- #
         imgs = self.vqvae.decode_code(code_t=top_seq, code_b=bot_seq)
         return imgs.clamp(-1, 1)  # match VQ-VAE output range
+
