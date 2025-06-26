@@ -1,6 +1,8 @@
 import argparse
 from omegaconf import OmegaConf
 from functools import reduce
+from pathlib import Path
+from itertools import islice
 
 import numpy as np
 import torch
@@ -14,6 +16,8 @@ import einops
 
 from src.dataloader.ffhq import FFHQWeightedDataset
 from src.dataloader.weighting import DataWeighter
+from src.metrics.fid import FIDScore
+from src.metrics.spectral import SpectralScore
 from src.ctrloralter.model import SD15
 from src.ctrloralter.annotators.openclip import VisionModel
 from src.ctrloralter.mapper_network import SimpleMapper
@@ -44,11 +48,15 @@ if __name__ == "__main__":
     parser.add_argument("--num_devices", type=int, default=4, help="Number of devices to use for training")
     args = parser.parse_args()
 
+    output_dir = Path(args.model_output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
     # Seed everything
     pl.seed_everything(42)
 
     # Setup logger
     logger = get_logger("ctrloralter_ffhq")
+    log_every_n_steps = 50
 
     # -- Load Data module ----------------------------------------- #
 
@@ -71,7 +79,7 @@ if __name__ == "__main__":
     # -- Setup Accelerator ---------------------------------------- #
 
     accelerator = Accelerator(
-        project_dir=args.model_output_dir,
+        project_dir=output_dir,
         log_with="tensorboard",
         gradient_accumulation_steps=1,
         mixed_precision="bf16",
@@ -81,6 +89,28 @@ if __name__ == "__main__":
     logger.info("init trackers")
     if accelerator.is_main_process:
         accelerator.init_trackers("")
+
+    
+    # -- Initialize FID and Spectral metric ----------------------- #
+
+    if accelerator.is_main_process:
+
+        # Initialize instances
+        fid_instance = FIDScore(img_size=512, device=args.device)
+        spectral_instance = SpectralScore(img_size=512, device=args.device)
+
+        # Load validation dataset
+        val_dataset = datamodule.val_dataloader().dataset
+
+        # Fit metrics
+        fid_instance.fit_real(val_dataset)
+        spectral_instance.fit_real(val_dataset)
+
+    else:
+        fid_instance = spectral_instance = None
+
+    # Wait for all processes to finish fitting the metrics
+    accelerator.wait_for_everyone()
 
     # -- Load model ----------------------------------------------- #
 
@@ -135,7 +165,10 @@ if __name__ == "__main__":
     logger.info(f"Number params all LoRAs(s) {sum(p.numel() for p in model.params_to_optimize):,}")
 
     optimizer = torch.optim.AdamW(model.params_to_optimize + mappers_params + encoder_params, lr=1e-4)
-    lr_scheduler = get_scheduler("constant", optimizer=optimizer)
+    lr_scheduler = get_scheduler("cosine", optimizer=optimizer, num_warmup_steps=0, num_training_steps=args.max_epochs * len(train_dataloader))
+
+    # Grab a fixed validation batch for logging
+    val_batch = next(iter(val_dataloader))
 
     # Prepare network
     logger.info("prepare network")
@@ -161,7 +194,11 @@ if __name__ == "__main__":
     logger.info("start training")
     global_step = 0
     for epoch in range(args.max_epochs):
-        logger.info(f"Epoch {epoch + 1}/{args.max_epochs}")
+        logger.info(f"Epoch {epoch}/{args.max_epochs}")
+        accelerator.log(
+            values={"epoch": epoch},
+            step=global_step
+        )
         unet.train()
         map(lambda m: m.train(), model.mappers)
         map(lambda e: e.train(), model.encoders)
@@ -188,13 +225,14 @@ if __name__ == "__main__":
                 lr_scheduler.step()
                 optimizer.zero_grad()
  
-            accelerator.log(
-                values={
-                    "train/loss": loss.detach().item(),
-                    "train/lr": lr_scheduler.get_last_lr()[0]
-                },
-                step=global_step
-            )
+            if step % log_every_n_steps == 0:
+                accelerator.log(
+                    values={
+                        "train/loss": loss.detach().item(),
+                        "train/lr": lr_scheduler.get_last_lr()[0]
+                    },
+                    step=global_step
+                )
             
             # after every gradient update step
             if accelerator.sync_gradients:
@@ -208,10 +246,10 @@ if __name__ == "__main__":
 
             val_loss = 0.0
             val_steps = 0
-            # Compute validation loss
-            for i, val_batch in enumerate(val_dataloader):
+            # -- Validation loss ---------------------------------- #
+            for batch in val_dataloader:
 
-                imgs = val_batch.to(accelerator.device)
+                imgs = batch.to(accelerator.device)
                 cs = [imgs] * n_loras
                 prompts = [""] * batch.size(0)
 
@@ -220,7 +258,7 @@ if __name__ == "__main__":
                     prompts,
                     cs,
                     cfg_mask=[True for _ in cfg_mask],
-                    batch=val_batch,
+                    batch=batch,
                 )
 
                 val_loss += loss.detach().item()
@@ -235,11 +273,11 @@ if __name__ == "__main__":
                 step=global_step
             )
 
-            # Use first batch for image logging
-            for i, val_batch in enumerate(val_dataloader):
-                if i > 0:
-                    break
-                imgs = val_batch.to(accelerator.device)
+            # -- FID and Spectral scores -------------------------- #
+            val_recons_imgs_local = []
+            for batch in val_dataloader:
+
+                imgs = batch.to(accelerator.device)
                 cs = [imgs] * n_loras
                 prompts = [""] * batch.size(0)
 
@@ -247,43 +285,75 @@ if __name__ == "__main__":
                     prompt=prompts,
                     num_images_per_prompt=1,
                     cs=cs,
-                    cfg_mask=cfg_mask,
+                    generator=None,
+                    cfg_mask=[True for _ in cfg_mask],
                 )
+
+                val_recons_imgs_local.append(
+                    torch.stack([TF.to_tensor(img).to(accelerator.device) for img in preds])
+                )
+
+            val_recons_imgs_local = torch.cat(val_recons_imgs_local, dim=0)
+            val_recons_imgs = accelerator.gather_for_metrics(val_recons_imgs_local).float().cpu()
+
+            if accelerator.is_main_process:
+                # Compute FID
+                fid_score = fid_instance.compute_score_from_data(val_recons_imgs)
+                logger.info(f"FID Score: {fid_score:.4f}")
+                
+                # Compute Spectral score
+                spectral_score = spectral_instance.compute_score_from_data(val_recons_imgs)
+                logger.info(f"Spectral Score: {spectral_score:.4f}")
+
+                accelerator.log(
+                    values={
+                        "val/fid_score": fid_score,
+                        "val/spectral_score": spectral_score,
+                    },
+                    step=global_step,
+                )
+
+            # -- Log reconstructions ------------------------------ #
+            imgs = val_batch.to(accelerator.device)
+            cs = [imgs] * n_loras
+            prompts = [""] * val_batch.size(0)
+
+            preds = model.sample_custom(
+                prompt=prompts,
+                num_images_per_prompt=1,
+                cs=cs,
+                generator=None,
+                cfg_mask=cfg_mask,
+            )
             
             # Log sampled images
             if accelerator.is_main_process:
-                lp = imgs.cpu()
-                lp = torch.nn.functional.interpolate(
-                    lp,
-                    size=(512, 512),
-                    mode="bicubic",
-                    align_corners=False,
-                )
-                log_cond = TF.to_pil_image(einops.rearrange(lp, "b c h w -> c h (b w) "))
-                log_cond = log_cond.convert("RGB")
-                log_cond = np.asarray(log_cond)
+                log_cond = np.asarray(imgs.cpu())
+                log_cond = einops.rearrange(log_cond, "b c h w -> b h w c")
+                log_cond = (log_cond + 1.0) / 2.0
 
-                log_pred = np.concatenate(
-                    [np.asarray(img.resize((cfg.size, cfg.size))) for img in preds],
-                    axis=1,
+                log_pred = np.stack(
+                    [np.asarray(img.resize((512, 512))) for img in preds],
+                    axis=0,
                 )
+                log_pred = log_pred / 255.0
             
                 for tracker in accelerator.trackers:
                     if tracker.name == "tensorboard":
                         np_images = np.concatenate([log_cond, log_pred], axis=0)
                         tracker.writer.add_images(
-                            "validation",
+                            "reconstructions",
                             np_images,
                             global_step=global_step,
-                            dataformats="HWC",
+                            dataformats="NHWC",
                         )
 
-        # Save checkpoint
+        # -- Save checkpoint -------------------------------------- #
         if accelerator.is_main_process:
             logger.info("Saving checkpoint")
             save_checkpoint(
-                unet_sds=model.unet.lora_state_dict(accelerator.unwrap_model(unet)),
+                unet_sds=model.get_lora_state_dict(accelerator.unwrap_model(unet)),
                 mapper_network_sd=[accelerator.unwrap_model(m).state_dict() for m in mappers],
                 encoder_sd=None,
-                path=args.model_output_dir / f"checkpoints/epoch_{epoch:03d}",
+                path=output_dir / f"checkpoints/epoch_{epoch:03d}",
             )

@@ -586,8 +586,10 @@ class SD15(ModelBase):
         skip_mapping: list[int] | bool = False,
         **kwargs,
     ):
-        height = self.unet.config.sample_size * self.pipe.vae_scale_factor
-        width = self.unet.config.sample_size * self.pipe.vae_scale_factor
+        # Handle DistributedDataParallel wrappers for unet
+        unet = self.unet.module if hasattr(self.unet, "module") else self.unet
+        height = unet.config.sample_size * self.pipe.vae_scale_factor
+        width = unet.config.sample_size * self.pipe.vae_scale_factor
 
         # Hande skip_encode and skip_mapping
         if isinstance(skip_encode, bool):
