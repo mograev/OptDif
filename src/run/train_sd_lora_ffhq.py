@@ -6,9 +6,11 @@ from itertools import islice
 
 import numpy as np
 import torch
+from torch import Generator
 import pytorch_lightning as pl
 from torchvision import transforms
 import torchvision.transforms.functional as TF
+import torchvision.utils as vutils
 from accelerate import Accelerator
 from accelerate.logging import get_logger
 from diffusers.optimization import get_scheduler
@@ -20,7 +22,9 @@ from src.metrics.fid import FIDScore
 from src.metrics.spectral import SpectralScore
 from src.ctrloralter.model import SD15
 from src.ctrloralter.annotators.openclip import VisionModel
-from src.ctrloralter.mapper_network import SimpleMapper
+from src.ctrloralter.annotators.midas import DepthEstimator
+from src.ctrloralter.annotators.hed import TorchHEDdetector
+from src.ctrloralter.mapper_network import SimpleMapper, FixedStructureMapper15
 from src.ctrloralter.utils import add_lora_from_config, save_checkpoint
 
 # Set the multiprocessing start method to spawn
@@ -43,6 +47,7 @@ if __name__ == "__main__":
     # Direct arguments
     parser.add_argument("--model_version", type=str, default="v1", help="Version of the model to use")
     parser.add_argument("--model_output_dir", type=str, help="Directory to save the model")
+    parser.add_argument("--struct_adapter", type=str, default=None, choices=["depth", "hed", "none"], help="Type of structure adapter to use")
     parser.add_argument("--max_epochs", type=int, default=100, help="Maximum number of epochs to train the model")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use for training (e.g., 'cuda' or 'cpu')")
     parser.add_argument("--num_devices", type=int, default=4, help="Number of devices to use for training")
@@ -128,7 +133,7 @@ if __name__ == "__main__":
             "style": {
                 "enable": "always",
                 "optimize": True,
-                "ckpt_path": "ctrloralter/checkpoints/sd15-style-cross-160-h",
+                "ckpt_path": "/BS/optdif/work/models/sd_lora/version_2/checkpoints/epoch_037", # start with already fine-tuned style LoRA
                 "ignore_check": False,
                 "cfg": True,
                 "transforms": [],
@@ -142,9 +147,46 @@ if __name__ == "__main__":
                 },
                 "encoder": VisionModel(clip_model="laion/CLIP-ViT-H-14-laion2B-s32B-b79K", local_files_only=False),
                 "mapper_network": SimpleMapper(1024, 1024),
-            }
-        },
+            },
+        }
     }
+    # Optionally load structure adapter
+    if args.struct_adapter == "depth":
+        raw_cfg["lora"]["struct"] = {
+                "enable": "always",
+                "optimize": True,
+                "ckpt_path": "ctrloralter/checkpoints/sd15-depth-128-only-res",
+                "ignore_check": False,
+                "cfg": False,
+                "transforms": [],
+                "config": {
+                    "lora_scale": 1.0,
+                    "rank": 128,
+                    "c_dim": 128,
+                    "adaption_mode": "only_res_conv",
+                    "lora_cls": "NewStructLoRAConv",
+                },
+                "encoder": DepthEstimator(size=512, local_files_only=False),
+                "mapper_network": FixedStructureMapper15(c_dim=128),
+            }
+    elif args.struct_adapter == "hed":
+        raw_cfg["lora"]["struct"] = {
+                "enable": "always",
+                "optimize": True,
+                "ckpt_path": "ctrloralter/checkpoints/sd15-hed-128-only-res",
+                "ignore_check": False,
+                "cfg": False,
+                "transforms": [],
+                "config": {
+                    "lora_scale": 0.3,
+                    "rank": 128,
+                    "c_dim": 128,
+                    "adaption_mode": "only_res_conv",
+                    "lora_cls": "NewStructLoRAConv",
+                },
+                "encoder": TorchHEDdetector(size=512, local_files_only=False),
+                "mapper_network": FixedStructureMapper15(c_dim=128),
+            }
     cfg = OmegaConf.create(raw_cfg, flags={"allow_objects": True})
     n_loras = len(cfg.lora.keys())
 
@@ -168,7 +210,8 @@ if __name__ == "__main__":
     lr_scheduler = get_scheduler("cosine", optimizer=optimizer, num_warmup_steps=0, num_training_steps=args.max_epochs * len(train_dataloader))
 
     # Grab a fixed validation batch for logging
-    val_batch = next(iter(val_dataloader))
+    # val_batch = next(iter(val_dataloader))
+    eval_batch = torch.load("/BS/optdif/work/data/ffhq/eval_batch.pt")
 
     # Prepare network
     logger.info("prepare network")
@@ -193,18 +236,19 @@ if __name__ == "__main__":
     # -- Training Loop -------------------------------------------- #
     logger.info("start training")
     global_step = 0
-    for epoch in range(args.max_epochs):
+    for epoch in range(-1, args.max_epochs):
         logger.info(f"Epoch {epoch}/{args.max_epochs}")
-        accelerator.log(
-            values={"epoch": epoch},
-            step=global_step
-        )
         unet.train()
         map(lambda m: m.train(), model.mappers)
         map(lambda e: e.train(), model.encoders)
 
         # Training steps
         for step, batch in enumerate(train_dataloader):
+
+            # Log initial validation results before training starts
+            if epoch == -1:
+                break
+
             with accelerator.accumulate(unet, *mappers, *encoders):
                 imgs = batch.to(accelerator.device)
                 cs = [imgs] * n_loras
@@ -215,7 +259,7 @@ if __name__ == "__main__":
                     imgs,
                     prompts,
                     cs,
-                    cfg_mask=[True for _ in cfg_mask],
+                    cfg_mask=cfg_mask,
                     batch=batch,
                 )
 
@@ -228,6 +272,7 @@ if __name__ == "__main__":
             if step % log_every_n_steps == 0:
                 accelerator.log(
                     values={
+                        "epoch": epoch,
                         "train/loss": loss.detach().item(),
                         "train/lr": lr_scheduler.get_last_lr()[0]
                     },
@@ -257,7 +302,7 @@ if __name__ == "__main__":
                     imgs,
                     prompts,
                     cs,
-                    cfg_mask=[True for _ in cfg_mask],
+                    cfg_mask=cfg_mask,
                     batch=batch,
                 )
 
@@ -285,8 +330,8 @@ if __name__ == "__main__":
                     prompt=prompts,
                     num_images_per_prompt=1,
                     cs=cs,
-                    generator=None,
-                    cfg_mask=[True for _ in cfg_mask],
+                    generator=Generator(device="cuda").manual_seed(42),
+                    cfg_mask=cfg_mask,
                 )
 
                 val_recons_imgs_local.append(
@@ -314,15 +359,15 @@ if __name__ == "__main__":
                 )
 
             # -- Log reconstructions ------------------------------ #
-            imgs = val_batch.to(accelerator.device)
+            imgs = eval_batch.to(accelerator.device)
             cs = [imgs] * n_loras
-            prompts = [""] * val_batch.size(0)
+            prompts = [""] * eval_batch.size(0)
 
             preds = model.sample_custom(
                 prompt=prompts,
                 num_images_per_prompt=1,
                 cs=cs,
-                generator=None,
+                generator=Generator(device="cuda").manual_seed(42),
                 cfg_mask=cfg_mask,
             )
             
@@ -337,19 +382,19 @@ if __name__ == "__main__":
                     axis=0,
                 )
                 log_pred = log_pred / 255.0
+
+                # Build an image grid
+                cond  = torch.from_numpy(log_cond).permute(0,3,1,2)
+                pred  = torch.from_numpy(log_pred).permute(0,3,1,2)
+                panel = torch.cat([cond, pred], dim=0)
+                grid  = vutils.make_grid(panel, nrow=eval_batch.size(0), value_range=(0,1))
             
                 for tracker in accelerator.trackers:
                     if tracker.name == "tensorboard":
-                        np_images = np.concatenate([log_cond, log_pred], axis=0)
-                        tracker.writer.add_images(
-                            "reconstructions",
-                            np_images,
-                            global_step=global_step,
-                            dataformats="NHWC",
-                        )
-
+                        tracker.writer.add_image("reconstructions", grid, global_step)
+        
         # -- Save checkpoint -------------------------------------- #
-        if accelerator.is_main_process:
+        if accelerator.is_main_process and epoch > -1:
             logger.info("Saving checkpoint")
             save_checkpoint(
                 unet_sds=model.get_lora_state_dict(accelerator.unwrap_model(unet)),

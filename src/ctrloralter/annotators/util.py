@@ -1,10 +1,15 @@
 import os
+from pathlib import Path
+
 from torch.nn.functional import avg_pool2d, interpolate
 from torchvision.transforms.functional import center_crop
 import torch
 
-annotator_ckpts_path = os.path.join("~/.cache/custom", "ckpts")
-
+# annotator_ckpts_path = os.path.join(".cache/custom", "ckpts")
+# Path to this file:  .../work/src/ctrloralter/annotators/util.py
+# `parents[3]` points to the workspace root ".../work"
+annotator_ckpts_path = str(Path(__file__).resolve().parents[3])
+os.makedirs(annotator_ckpts_path, exist_ok=True)
 
 def better_resize(imgs: torch.Tensor, image_size: int) -> torch.Tensor:
     ss = imgs.shape

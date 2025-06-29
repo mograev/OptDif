@@ -79,7 +79,7 @@ class TorchHEDdetector(nn.Module):
         self.return_without_channels = return_without_channels
 
         remote_model_path = "https://huggingface.co/lllyasviel/Annotators/resolve/main/ControlNetHED.pth"
-        modelpath = os.path.join(annotator_ckpts_path, "ControlNetHED.pth")
+        modelpath = os.path.expanduser(os.path.join(annotator_ckpts_path, "ControlNetHED.pth"))
         if not os.path.exists(modelpath):
             #from basicsr.utils.download_util import load_file_from_url
             #load_file_from_url(remote_model_path, model_dir=annotator_ckpts_path)
@@ -92,7 +92,7 @@ class TorchHEDdetector(nn.Module):
             )
 
         self.netNetwork = ControlNetHED_Apache2().float().eval()
-        self.netNetwork.load_state_dict(torch.load(modelpath))
+        self.netNetwork.load_state_dict(torch.load(modelpath, map_location="cpu"))
 
         self.netNetwork = self.netNetwork.eval()
         self.netNetwork.requires_grad_(False)

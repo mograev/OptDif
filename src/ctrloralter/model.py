@@ -541,7 +541,6 @@ class SD15(ModelBase):
         self,
         cond: torch.Tensor,
         branch_idx: int = 0,
-        cfg_mask: bool | None = True,
         skip_encode: bool = False,
     ) -> list[torch.Tensor]:
         """
@@ -549,26 +548,19 @@ class SD15(ModelBase):
         Args:
             cond: Tensor of shape (B, C) representing the conditioning input.
             branch_idx: Index of the branch to use for encoding and mapping.
-            cfg_mask: List of booleans indicating whether to apply CFG dropout for each lora conditioning.
             skip_encode: If True, skips the encoder step and uses the conditioning input directly.
         Returns:
             List of tensors, each of shape (B, C), representing the shared scale-and-shift fingerprints φ.
         """
-        # 1) apply CFG dropout if requested
-        if cfg_mask:
-            mask = torch.rand(cond.shape[0], device=cond.device) < self.c_dropout
-            cond = cond.clone()
-            cond[mask] = 0
-
-        # 2) apply optional transforms
+        # 1) apply optional transforms
         t = self.lora_transforms[branch_idx]
         if t is not None:
             cond = t(cond)
 
-        # 3) encode if needed
+        # 2) encode if needed
         code = cond if skip_encode else self.encoders[branch_idx](cond)
 
-        # 4) forward through shared mapper for phi fingerprint
+        # 3) forward through shared mapper for phi fingerprint
         phi = self.mappers[branch_idx](code)   # shape [B, phi_dim]
 
         return phi
