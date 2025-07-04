@@ -31,8 +31,8 @@ n_init_retrain_epochs=0 #1
 result_path="results/sd_gbo_01/"
 sd_vae_path="models/sd_vae/version_0/huggingface" #"stabilityai/stable-diffusion-3.5-medium"
 predictor_attr_file="models/classifier/celeba_smile/attributes.json"
-predictor_path="models/classifier/celeba_smile/predictor_128_scaled3.pth.tar"
-scaled_predictor=True
+predictor_path="models/classifier/celeba_smile/predictor_128.pth.tar"
+scaled_predictor=False
 
 # Optimization
 opt_strategy="GBO"

@@ -33,8 +33,8 @@ sd_vae_path="stabilityai/stable-diffusion-3.5-medium"
 latent_model_config_path="models/latent_vqvae2/version_0/hparams.yaml"
 latent_model_ckpt_path="models/latent_vqvae2/version_0/checkpoints/last.ckpt"
 predictor_attr_file="models/classifier/celeba_smile/attributes.json"
-predictor_path="models/classifier/celeba_smile/predictor_128_scaled3.pth.tar"
-scaled_predictor=True
+predictor_path="models/classifier/celeba_smile/predictor_128.pth.tar"
+scaled_predictor=False
 
 # Optimization
 opt_strategy="DNGO"

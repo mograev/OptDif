@@ -32,8 +32,8 @@ result_path="results/ctrloralter_gbo_16/"
 sd_path="runwayml/stable-diffusion-v1-5"
 struct_adapter="none" # depth, hed, none
 predictor_attr_file="models/classifier/celeba_smile/attributes.json"
-predictor_path="models/classifier/celeba_smile/predictor_128_scaled3.pth.tar"
-scaled_predictor=True
+predictor_path="models/classifier/celeba_smile/predictor_128.pth.tar"
+scaled_predictor=False
 
 # Optimization
 opt_strategy="GBO"

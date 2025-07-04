@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #SBATCH --job-name=lso_latent_vqvae_gbo               # Job name
-#SBATCH --output=logs/lso/latent_vqvae_gbo_04_%j.out  # Output log file
-#SBATCH --error=logs/lso/latent_vqvae_gbo_04_%j.err   # Error log file
+#SBATCH --output=logs/lso/latent_vqvae_gbo_06_%j.out  # Output log file
+#SBATCH --error=logs/lso/latent_vqvae_gbo_06_%j.err   # Error log file
 #SBATCH --time=4:00:00                                # Maximum runtime (hh:mm:ss)
 #SBATCH --partition=gpu20                             # Partition to submit the job to
 #SBATCH --gres=gpu:1                                  # Request GPU resources
@@ -28,24 +28,24 @@ query_budget=50 #500
 retraining_frequency=5
 n_retrain_epochs=0.0 #0.1
 n_init_retrain_epochs=0.0 #1
-result_path="results/latent_vqvae_gbo_05/"
+result_path="results/latent_vqvae_gbo_06/"
 sd_vae_path="stabilityai/stable-diffusion-3.5-medium"
 latent_model_config_path="models/latent_vqvae/version_8_2/hparams.yaml"
 latent_model_ckpt_path="models/latent_vqvae/version_8_2/checkpoints/last.ckpt"
 predictor_attr_file="models/classifier/celeba_smile/attributes.json"
-predictor_path="models/classifier/celeba_smile/predictor_128_scaled3.pth.tar"
-scaled_predictor=True
+predictor_path="models/classifier/celeba_smile/predictor_128.pth.tar"
+scaled_predictor=False
 
 # Optimization
 opt_strategy="GBO"
-n_out=5 #5
-n_starts=20 #20
-n_rand_points=800 #8000
-n_best_points=200 #2000
+n_out=5
+n_starts=20
+n_rand_points=8000
+n_best_points=2000
 sample_distribution="train_data" # "train_data", "uniform", "normal"
 
 # Feature Selection
-feature_selection="FI" # "FI", "PCA"
+feature_selection="None" # "FI", "PCA", "None"
 feature_selection_dims=512
 feature_selection_model_path="models/feature_selection/latents_fi_model.pkl"
 
