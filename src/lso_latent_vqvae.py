@@ -45,7 +45,7 @@ def add_wr_args(parser):
     wr_group.add_argument("--latent_model_config_path", type=str, required=True, help="path to the config file of the latent model")
     wr_group.add_argument("--latent_model_ckpt_path", type=str, default=None, help="path to pretrained latent model to use")
     wr_group.add_argument("--predictor_path", type=str, default=None, help="path to pretrained predictor to use")
-    wr_group.add_argument("--scaled_predictor", type=bool, default=False, help="whether the predictor is scaled")
+    wr_group.add_argument("--scaled_predictor", action="store_true", help="whether the predictor uses temperature scaling")
     wr_group.add_argument("--predictor_attr_file", type=str, default=None, help="path to attribute file of the predictor")
     wr_group.add_argument("--n_retrain_epochs", type=float, default=1., help="number of epochs to retrain for")
     wr_group.add_argument("--n_init_retrain_epochs", type=float, default=None, help="None to use n_retrain_epochs, 0.0 to skip init retrain")

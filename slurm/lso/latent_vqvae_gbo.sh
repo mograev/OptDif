@@ -34,7 +34,6 @@ latent_model_config_path="models/latent_vqvae/version_8_2/hparams.yaml"
 latent_model_ckpt_path="models/latent_vqvae/version_8_2/checkpoints/last.ckpt"
 predictor_attr_file="models/classifier/celeba_smile/attributes.json"
 predictor_path="models/classifier/celeba_smile/predictor_128.pth.tar"
-scaled_predictor=False
 
 # Optimization
 opt_strategy="GBO"
@@ -77,7 +76,6 @@ CUDA_VISIBLE_DEVICES=1 python src/lso_latent_vqvae.py \
     --latent_model_ckpt_path $latent_model_ckpt_path \
     --predictor_attr_file $predictor_attr_file \
     --predictor_path $predictor_path \
-    --scaled_predictor $scaled_predictor \
     --opt_strategy $opt_strategy \
     --n_out $n_out \
     --n_starts $n_starts \

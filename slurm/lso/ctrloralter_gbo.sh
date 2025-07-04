@@ -33,7 +33,6 @@ sd_path="runwayml/stable-diffusion-v1-5"
 struct_adapter="none" # depth, hed, none
 predictor_attr_file="models/classifier/celeba_smile/attributes.json"
 predictor_path="models/classifier/celeba_smile/predictor_128.pth.tar"
-scaled_predictor=False
 
 # Optimization
 opt_strategy="GBO"
@@ -69,7 +68,6 @@ CUDA_VISIBLE_DEVICES=0 python src/lso_ctrloralter.py \
     --struct_adapter $struct_adapter \
     --predictor_attr_file $predictor_attr_file \
     --predictor_path $predictor_path \
-    --scaled_predictor $scaled_predictor \
     --opt_strategy $opt_strategy \
     --n_starts $n_starts \
     --n_rand_points $n_rand_points \
