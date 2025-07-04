@@ -13,6 +13,8 @@ import pickle
 
 import torch
 from torch.utils.data import DataLoader
+from torchvision import transforms
+from torchvision.utils import save_image
 import torch.multiprocessing as mp # Set the multiprocessing start method to spawn
 import pytorch_lightning as pl
 import numpy as np
@@ -21,13 +23,11 @@ import numpy as np
 from diffusers import AutoencoderKL
 
 # My imports
-from src.dataloader.ffhq import FFHQWeightedDataset
-from src.dataloader.utils import SimpleFilenameToTensorDataset
+from src.dataloader.ffhq import FFHQDataset
 from src.dataloader.weighting import DataWeighter
 from src.classification.smile_classifier import SmileClassifier
 from src.models.lit_vae import LitVAE
-from src.utils import SubmissivePlProgressbar
-from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE, ENTMOOT_TRAIN_OPT_FILE, GBO_PCA_TRAIN_FILE, GBO_PCA_OPT_FILE, GBO_FI_TRAIN_FILE, GBO_FI_OPT_FILE
+from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE
 
 
 # Weighted Retraining arguments
@@ -60,7 +60,7 @@ def add_opt_args(parser):
     opt_group.add_argument("--n_rand_points", type=int, default=8000, help="Number of random points to sample for surrogate model training")
     opt_group.add_argument("--n_best_points", type=int, default=2000, help="Number of best points to sample for surrogate model training")
     opt_group.add_argument("--sample_distribution", type=str, default="normal", choices=["normal", "uniform", "train_data"], help="Distribution to sample from: 'normal', 'uniform' or 'train_data'")
-    opt_group.add_argument("--feature_selection", type=str, default=None, choices=["PCA", "FI"], help="Feature selection method to use: 'PCA' or 'FI'. If None, no feature selection is applied.")
+    opt_group.add_argument("--feature_selection", type=str, default="None", choices=["PCA", "FI", "None"], help="Feature selection method to use: 'PCA' or 'FI'. If 'None', no feature selection is applied.")
     opt_group.add_argument("--feature_selection_dims", type=int, default=512, help="Number of (PCA or FI) dimensions to use. If feature_selection is None, this is ignored.")
     opt_group.add_argument("--feature_selection_model_path", type=str, default=None, help="Path to the feature selection model. If feature_selection is None, this is ignored.")
 
@@ -254,35 +254,28 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
     # First, choose points to train!
     chosen_indices = _choose_best_rand_points(args, datamodule)
 
-    # Create a new dataset with only the chosen points
-    filenames = [datamodule.data_train[i] for i in chosen_indices]
-    img_tensor_dir = datamodule.mode_dirs["img_tensor"]
-    temp_dataset = SimpleFilenameToTensorDataset(filenames, img_tensor_dir)
-    targets = datamodule.attr_train[chosen_indices]
+    # Get chosen points from the dataset
+    temp_dataset = datamodule.data_train[chosen_indices]
+    temp_targets = datamodule.attr_train[chosen_indices]
 
-    # Create a dataloader for the chosen points
-    temp_dataloader = DataLoader(
-        temp_dataset,
-        batch_size=args.batch_size,
-        num_workers=args.num_workers,
-        shuffle=False,
-    )
+    # Get latent points
+    datamodule.set_encode(True)
+    latent_points = datamodule.data_train[chosen_indices]
+    datamodule.set_encode(False)
 
-    # Encode the data to the lower-dimensional latent space
-    latent_points = _encode_images(sd_vae, temp_dataloader, args.device)
     logger.debug(f"Latent points shape: {latent_points.shape}")
 
     # Save points to file
     if args.opt_strategy in ["GP", "DNGO", "DNGO_PCA"]:
-        targets = -targets.reshape(-1, 1)  # Since it is a minimization problem
+        temp_targets = -temp_targets.reshape(-1, 1)  # Since it is a minimization problem
     else:
-        targets = targets.reshape(-1, 1)
+        temp_targets = temp_targets.reshape(-1, 1)
 
     # Save the file
     np.savez_compressed(
         data_file,
         X_train=latent_points.astype(np.float64),
-        y_train=targets.astype(np.float64),
+        y_train=temp_targets.astype(np.float64),
     )
 
     # Save old progress bar description
@@ -315,7 +308,7 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
             ]
 
             # Append feature selection arguments if specified
-            if args.feature_selection is not None:
+            if args.feature_selection != "None":
                 gp_train_command.append(f"--feature_selection={args.feature_selection}")
                 gp_train_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
                 if args.feature_selection_model_path is not None:
@@ -339,7 +332,7 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
             ]
 
             # Append feature selection arguments if specified
-            if args.feature_selection is not None:
+            if args.feature_selection != "None":
                 dngo_train_command.append(f"--feature_selection={args.feature_selection}")
                 dngo_train_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
                 if args.feature_selection_model_path is not None:
@@ -379,7 +372,7 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
             bo_opt_command.append(f"--opt_constraint_strategy={args.opt_constraint_strategy}")
             bo_opt_command.append(f"--n_gmm_components={args.n_gmm_components}")
 
-        if args.feature_selection is not None:
+        if args.feature_selection != "None":
             bo_opt_command.append(f"--feature_selection={args.feature_selection}")
             bo_opt_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
 
@@ -406,7 +399,7 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
         ]
 
         # Append feature selection arguments if specified
-        if args.feature_selection is not None:
+        if args.feature_selection != "None":
             gbo_train_command.append(f"--feature_selection={args.feature_selection}")
             gbo_train_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
             if args.feature_selection_model_path is not None:
@@ -437,7 +430,7 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
             f"--sample_distribution={args.sample_distribution}",
         ]
 
-        if args.feature_selection is not None:
+        if args.feature_selection != "None":
             gbo_opt_command.append(f"--feature_selection={args.feature_selection}")
             gbo_opt_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
         
@@ -446,39 +439,21 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
 
         _run_command(gbo_opt_command, f"GBO opt")
 
-    elif args.opt_strategy == "ENTMOOT":
-
-        # Fitting and optimizing surrogate model (in one script)
-       new_entmoot_file = run_folder / f"entmoot_opt_res.npy"
-       log_path = run_folder / f"entmoot_train_opt.log"
-
-       entmoot_train_opt_command = [
-            "python",
-            ENTMOOT_TRAIN_OPT_FILE,
-            f"--seed={iter_seed}",
-            f"--data_file={str(data_file)}",
-            f"--save_file={str(new_entmoot_file)}",
-            f"--predictor_path={str(args.predictor_path)}",
-            f"--scaled_predictor={str(args.scaled_predictor)}",
-            f"--predictor_attr_file={str(args.predictor_attr_file)}",
-            f"--n_starts={str(args.n_starts)}",
-            f"--n_out={str(num_queries_to_do)}",
-            f"--logfile={str(log_path)}",
-       ]
-
-       if pbar is not None:
-           pbar.set_description("ENTMOOT training and optimization")
-
-       _run_command(entmoot_train_opt_command, f"ENTMOOT train and opt")
-
-
     # Load point (and init points if available)
     results = np.load(opt_path, allow_pickle=True)
     z_opt = results["z_opt"]
     z_init = results.get("z_init", None)
+    z_indices = results.get("z_indices", None)
+
+    # Derive original images from initial indices
+    # Only applicable if initial points are sampled from the training data
+    x_orig = None
+    if args.sample_distribution == "train_data" and z_indices is not None:
+        x_orig = [temp_dataset[int(idx)] for idx in z_indices]
+        y_orig = [temp_targets[int(idx)].item() for idx in z_indices]
     
     # Decode point
-    x_new, y_new = _decode_and_predict(
+    x_opt, y_opt = _decode_and_predict(
         sd_vae,
         predictor,
         torch.as_tensor(z_opt, device=device),
@@ -486,9 +461,9 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
     )
 
     # Decode initial points if available
-    x_new_init = None
+    x_init = None
     if z_init is not None:
-        x_new_init, _ = _decode_and_predict(
+        x_init, y_init = _decode_and_predict(
             sd_vae,
             predictor,
             torch.as_tensor(z_init, device=device),
@@ -501,14 +476,16 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
 
         # Update best point in progress bar
         if postfix is not None:
-            postfix["best"] = max(postfix["best"], float(max(y_new)))
+            postfix["best"] = max(postfix["best"], float(max(y_opt)))
             pbar.set_postfix(postfix)
 
     # Return data points
-    if x_new_init is not None:
-        return (x_new, y_new, z_opt, x_new_init)
+    if x_init is not None and x_orig is not None:
+        return (x_opt, y_opt, z_opt, x_init, y_init, x_orig, y_orig)
+    elif x_init is not None:
+        return (x_opt, y_opt, z_opt, x_init, y_init)
     else:
-        return (x_new, y_new, z_opt)
+        return (x_opt, y_opt, z_opt)
 
 
 def main_loop(args):
@@ -529,9 +506,6 @@ def main_loop(args):
     # Setup logging
     setup_logger(result_dir / "main.log")
     
-    # Load datamodule
-    datamodule = FFHQWeightedDataset(args, DataWeighter(args))
-    
     # Load pre-trained SD-VAE model
     if args.sd_vae_path == "stabilityai/stable-diffusion-3.5-medium":
         sd_vae = AutoencoderKL.from_pretrained("stabilityai/stable-diffusion-3.5-medium", subfolder="vae")
@@ -551,6 +525,18 @@ def main_loop(args):
         latent_shape = sd_vae.encode(dummy).latent_dist.sample().shape[1:]  # (C', H', W')
     sd_vae.latent_shape = latent_shape
 
+    # Load datamodule
+    datamodule = FFHQDataset(
+        args,
+        data_weighter=DataWeighter(args),
+        encoder=sd_vae,
+        transform=transforms.Compose([
+            transforms.Resize(size=256),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        ]),
+    )
+
     # Load pretrained (temperature-scaled) predictor
     predictor = SmileClassifier(
         model_path=args.predictor_path,
@@ -562,9 +548,9 @@ def main_loop(args):
 
     # Set up results tracking
     results = dict(
-        opt_points=[],  # saves (default: 5) optimal points in the original input space for each retraining iteration
         opt_point_properties=[], # saves corresponding function evaluations
-        opt_latent_points=[], # saves corresponding latent points
+        init_point_properties=[], # saves initial point properties if available
+        orig_point_properties=[], # saves original point properties if available
         opt_model_version=[],
         params=str(sys.argv),
     )
@@ -592,7 +578,7 @@ def main_loop(args):
             samples_so_far = args.retraining_frequency * ret_idx
 
             # Retraining
-            datamodule.set_mode("img_tensor")
+            datamodule.set_encode(False)
             num_epochs = args.n_retrain_epochs
             if ret_idx == 0 and args.n_init_retrain_epochs is not None:
                 # default: initial fine-tuning of pre-trained model for 1 epoch
@@ -634,52 +620,68 @@ def main_loop(args):
                 postfix=postfix,
             )
 
-            if len(lso_results) == 4:
-                x_new, y_new, z_query, x_new_init = lso_results
+            # Unpack results based on the number of returned values
+            if len(lso_results) == 7:
+                x_opt, y_opt, z_opt, x_init, y_init, x_orig, y_orig = lso_results
+            elif len(lso_results) == 5:
+                x_opt, y_opt, z_opt, x_init, y_init = lso_results
+                x_orig, y_orig = None, None
             else:
-                x_new, y_new, z_query = lso_results
-                x_new_init = None
+                x_opt, y_opt, z_opt = lso_results
+                x_init, y_init = None, None
+                x_orig, y_orig = None, None
 
             # Create a new directory for the sampled data
             curr_samples_dir = Path(samples_dir) / f"iter_{samples_so_far}"
             curr_samples_dir.mkdir()
 
             # Save the new latent points
-            os.makedirs(curr_samples_dir / "latents")
-            for i, z in enumerate(z_query):
+            os.makedirs(curr_samples_dir / "latent")
+            for i, z in enumerate(z_opt):
                 if not isinstance(z, torch.Tensor):
                     z = torch.from_numpy(z)
-                torch.save(z, str(Path(curr_samples_dir) / f"latents/tensor_{i}.pt"), pickle_protocol=pickle.HIGHEST_PROTOCOL)
+                torch.save(z, str(Path(curr_samples_dir) / f"latent/{i}.pt"))
 
             # Save the new images
+            os.makedirs(curr_samples_dir / "img_opt")
             new_filename_list = []
-            os.makedirs(curr_samples_dir / "img_tensor")
-            for i, x in enumerate(x_new):
+            for i, x in enumerate(x_opt):
                 if not isinstance(x, torch.Tensor):
                     x = torch.from_numpy(x)
-                torch.save(x, str(Path(curr_samples_dir) / f"img_tensor/tensor_{i}.pt"), pickle_protocol=pickle.HIGHEST_PROTOCOL)
-                new_filename_list.append(str(Path(curr_samples_dir) / f"img_tensor/tensor_{i}.pt"))
+                img_path = str(Path(curr_samples_dir) / f"img_opt/{i}.png")
+                save_image(x, img_path, normalize=True)
+                new_filename_list.append(img_path)
 
-            # Save initial points if available
-            if x_new_init is not None:
-                os.makedirs(curr_samples_dir / "img_tensor_init")
-                for i, x in enumerate(x_new_init):
+            # Save initial points (reconstructions) if available
+            if x_init is not None:
+                os.makedirs(curr_samples_dir / "img_init")
+                for i, x in enumerate(x_init):
                     if not isinstance(x, torch.Tensor):
                         x = torch.from_numpy(x)
-                    torch.save(x, str(Path(curr_samples_dir) / f"img_tensor_init/tensor_{i}.pt"), pickle_protocol=pickle.HIGHEST_PROTOCOL)
+                    img_path = str(Path(curr_samples_dir) / f"img_init/{i}.png")
+                    save_image(x, img_path, normalize=True)
             
+            # Save original images if available
+            if x_orig is not None:
+                os.makedirs(curr_samples_dir / "img_orig")
+                for i, x in enumerate(x_orig):
+                    if not isinstance(x, torch.Tensor):
+                        x = torch.from_numpy(x)
+                    img_path = str(Path(curr_samples_dir) / f"img_orig/{i}.png")
+                    save_image(x, img_path, normalize=True)
+
             # Append new points to dataset and adapt weighting
-            datamodule.append_train_data(new_filename_list, y_new)
+            datamodule.append_train_data(new_filename_list, y_opt)
 
             # Save results
-            results["opt_latent_points"] += [z for z in z_query]
-            results["opt_points"] += [x.detach().numpy() for x in x_new]
-            results["opt_point_properties"] += [y for y in y_new]
-            results["opt_model_version"] += [ret_idx] * len(x_new)
+            results["opt_point_properties"] += [float(y) for y in y_opt]
+            results["init_point_properties"] += [float(y) for y in y_init] if y_init is not None else []
+            results["orig_point_properties"] += [float(y) for y in y_orig] if y_orig is not None else []
+            results["opt_model_version"] += [ret_idx] * len(x_opt)
             np.savez_compressed(str(result_dir / "results.npz"), **results)
 
             # Final update of progress bar
-            postfix["best"] = max(postfix["best"], float(y_new.max()))
+            postfix["best"] = max(postfix["best"], float(y_opt.max()))
             postfix["n_train"] = len(datamodule.data_train)
             pbar.set_postfix(postfix)
             pbar.update(n=num_queries_to_do)
@@ -693,7 +695,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser = add_wr_args(parser)
     parser = add_opt_args(parser)
-    parser = FFHQWeightedDataset.add_data_args(parser)
+    parser = FFHQDataset.add_data_args(parser)
     parser = DataWeighter.add_weight_args(parser)
     
     args = parser.parse_args()

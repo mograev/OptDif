@@ -67,7 +67,7 @@ def add_opt_args(parser):
     opt_group.add_argument("--n_rand_points", type=int, default=8000, help="Number of random points to sample for surrogate model training")
     opt_group.add_argument("--n_best_points", type=int, default=2000, help="Number of best points to sample for surrogate model training")
     opt_group.add_argument("--sample_distribution", type=str, default="normal", choices=["normal", "uniform", "train_data"], help="Distribution to sample from: 'normal', 'uniform' or 'train_data'")
-    opt_group.add_argument("--feature_selection", type=str, default=None, choices=["PCA", "FI"], help="Feature selection method to use: 'PCA' or 'FI'. If None, no feature selection is applied.")
+    opt_group.add_argument("--feature_selection", type=str, default="None", choices=["PCA", "FI", "None"], help="Feature selection method to use: 'PCA' or 'FI'. If 'None', no feature selection is applied.")
     opt_group.add_argument("--feature_selection_dims", type=int, default=512, help="Number of (PCA or FI) dimensions to use. If feature_selection is None, this is ignored.")
     opt_group.add_argument("--feature_selection_model_path", type=str, default=None, help="Path to the feature selection model. If feature_selection is None, this is ignored.")
 
@@ -280,7 +280,7 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
             ]
 
             # Append feature selection arguments if specified
-            if args.feature_selection is not None:
+            if args.feature_selection != "None":
                 gp_train_command.append(f"--feature_selection={args.feature_selection}")
                 gp_train_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
                 if args.feature_selection_model_path is not None:
@@ -304,7 +304,7 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
             ]
 
             # Append feature selection arguments if specified
-            if args.feature_selection is not None:
+            if args.feature_selection != "None":
                 dngo_train_command.append(f"--feature_selection={args.feature_selection}")
                 dngo_train_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
                 if args.feature_selection_model_path is not None:
@@ -344,7 +344,7 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
             bo_opt_command.append(f"--opt_constraint_strategy={args.opt_constraint_strategy}")
             bo_opt_command.append(f"--n_gmm_components={args.n_gmm_components}")
 
-        if args.feature_selection is not None:
+        if args.feature_selection != "None":
             bo_opt_command.append(f"--feature_selection={args.feature_selection}")
             bo_opt_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
 
@@ -371,7 +371,7 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
         ]
 
         # Append feature selection arguments if specified
-        if args.feature_selection is not None:
+        if args.feature_selection != "None":
             gbo_train_command.append(f"--feature_selection={args.feature_selection}")
             gbo_train_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
             if args.feature_selection_model_path is not None:
@@ -402,7 +402,7 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
             f"--sample_distribution={args.sample_distribution}",
         ]
 
-        if args.feature_selection is not None:
+        if args.feature_selection != "None":
             gbo_opt_command.append(f"--feature_selection={args.feature_selection}")
             gbo_opt_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
         
@@ -422,7 +422,7 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
     x_orig = None
     if args.sample_distribution == "train_data" and z_indices is not None:
         x_orig = [temp_dataset[int(idx)] for idx in z_indices]
-        y_orig = [temp_targets[int(idx)] for idx in z_indices]
+        y_orig = [temp_targets[int(idx)].item() for idx in z_indices]
 
     # Decode optimized points
     x_opt, y_opt = _decode_and_predict(
