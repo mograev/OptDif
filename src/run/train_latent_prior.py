@@ -6,9 +6,8 @@ import torch.multiprocessing as mp
 import pytorch_lightning as pl
 from torchvision import transforms
 
-from src.dataloader.ffhq import FFHQWeightedDataset
-from src.dataloader.weighting import DataWeighter
-from src.dataloader.utils import MultiModeDataset
+from src.dataloader.ffhq import FFHQDataset
+from src.dataloader.utils import OptEncodeDataset
 from src.metrics.fid import FIDScore
 from src.models.transformer_prior import HierarchicalTransformerPrior
 from src.models.pixelsnail_prior import HierarchicalPixelSnailPrior
@@ -30,8 +29,7 @@ if __name__ == "__main__":
 
     # Parse arguments for external configuration
     parser = argparse.ArgumentParser()
-    parser = FFHQWeightedDataset.add_data_args(parser)
-    parser = DataWeighter.add_weight_args(parser)
+    parser = FFHQDataset.add_data_args(parser)
 
     # Shared arguments
     parser.add_argument("--latent_model_config_path", required=True, help="YAML config used to build the LatentVQVAE2")
@@ -64,8 +62,16 @@ if __name__ == "__main__":
     sd_vae.eval()
 
     # Load data
-    datamodule = FFHQWeightedDataset(args, DataWeighter(args), sd_vae)
-    datamodule.set_mode("img")
+    datamodule = FFHQDataset(
+        args,
+        transform=transforms.Compose([
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomResizedCrop(size=256, scale=(0.9, 1.0)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        ]),
+        encoder=sd_vae
+    ).set_encode(True)
 
     # -- Initialize FID metric ------------------------------------ #
 
@@ -73,20 +79,19 @@ if __name__ == "__main__":
     fid_instance = FIDScore(img_size=256, device=args.device)
 
     # Load validation dataset
-    val_filenames = datamodule.val_dataloader().dataset.filename_list
-    val_set = MultiModeDataset(
-        val_filenames,
-        mode_dirs={"img": args.img_dir},
+    val_filename_list = datamodule.val_dataloader().dataset.filename_list
+    val_dataset = OptEncodeDataset(
+        val_filename_list,
+        img_dir=datamodule.img_dir,
         transform=transforms.Compose([
             transforms.Resize((256, 256)),
             transforms.ToTensor(),
-            transforms.Normalize([0.5, 0.5, 0.5], [0.5]*3)
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ]),
     )
-    val_set.set_mode("img")
 
     # Fit metric
-    fid_instance.fit_real(val_set)
+    fid_instance.fit_real(val_dataset)
 
     # -- Load latent model ---------------------------------------- #
     with open(args.latent_model_config_path) as f:

@@ -16,8 +16,7 @@ from accelerate.logging import get_logger
 from diffusers.optimization import get_scheduler
 import einops
 
-from src.dataloader.ffhq import FFHQWeightedDataset
-from src.dataloader.weighting import DataWeighter
+from src.dataloader.ffhq import FFHQDataset
 from src.metrics.fid import FIDScore
 from src.metrics.spectral import SpectralScore
 from src.ctrloralter.model import SD15
@@ -41,8 +40,7 @@ if __name__ == "__main__":
 
     # Parse arguments for external configuration
     parser = argparse.ArgumentParser()
-    parser = FFHQWeightedDataset.add_data_args(parser)
-    parser = DataWeighter.add_weight_args(parser)
+    parser = FFHQDataset.add_data_args(parser)
 
     # Direct arguments
     parser.add_argument("--model_version", type=str, default="v1", help="Version of the model to use")
@@ -66,9 +64,8 @@ if __name__ == "__main__":
     # -- Load Data module ----------------------------------------- #
 
     # Load data
-    datamodule = FFHQWeightedDataset(
+    datamodule = FFHQDataset(
         args,
-        DataWeighter(args),
         transform=transforms.Compose([
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.RandomResizedCrop(size=(512, 512), scale=(0.9, 1.0)),
@@ -76,7 +73,6 @@ if __name__ == "__main__":
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
         ]),
     )
-    datamodule.set_mode("img")
 
     train_dataloader = datamodule.train_dataloader()
     val_dataloader = datamodule.val_dataloader()
@@ -133,7 +129,8 @@ if __name__ == "__main__":
             "style": {
                 "enable": "always",
                 "optimize": True,
-                "ckpt_path": "/BS/optdif/work/models/sd_lora/version_2/checkpoints/epoch_037", # start with already fine-tuned style LoRA
+                # "ckpt_path": "/BS/optdif/work/models/sd_lora/version_2/checkpoints/epoch_036", # start with already fine-tuned style LoRA
+                "ckpt_path": "ctrloralter/checkpoints/sd15-style-cross-160-h",
                 "ignore_check": False,
                 "cfg": True,
                 "transforms": [],
@@ -178,7 +175,7 @@ if __name__ == "__main__":
                 "cfg": False,
                 "transforms": [],
                 "config": {
-                    "lora_scale": 0.3,
+                    "lora_scale": 1.0,
                     "rank": 128,
                     "c_dim": 128,
                     "adaption_mode": "only_res_conv",
@@ -211,7 +208,7 @@ if __name__ == "__main__":
 
     # Grab a fixed validation batch for logging
     # val_batch = next(iter(val_dataloader))
-    eval_batch = torch.load("/BS/optdif/work/data/ffhq/eval_batch.pt")
+    eval_batch = torch.load("/BS/optdif/work/data/ffhq/eval_batch/size_512.pt")
 
     # Prepare network
     logger.info("prepare network")

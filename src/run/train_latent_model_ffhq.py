@@ -6,12 +6,11 @@ import torch
 import pytorch_lightning as pl
 from torchvision import transforms
 
-from src.dataloader.ffhq import FFHQWeightedDataset
-from src.dataloader.weighting import DataWeighter
+from src.dataloader.ffhq import FFHQDataset
 from src.models.latent_models import LatentVAE, LatentVQVAE, LatentVQVAE2, LatentAutoencoder, LatentLinearAE
 from src.metrics.fid import FIDScore
 from src.metrics.spectral import SpectralScore
-from src.dataloader.utils import MultiModeDataset
+from src.dataloader.utils import OptEncodeDataset
 
 from diffusers import AutoencoderKL
 
@@ -29,8 +28,7 @@ if __name__ == "__main__":
 
     # Parse arguments for external configuration
     parser = argparse.ArgumentParser()
-    parser = FFHQWeightedDataset.add_data_args(parser)
-    parser = DataWeighter.add_weight_args(parser)
+    parser = FFHQDataset.add_data_args(parser)
 
     # Direct arguments
     parser.add_argument("--model_type", type=str, choices=["LatentVAE", "LatentVQVAE", "LatentVQVAE2", "LatentAutoencoder", "LatentLinearAE"], help="Type of latent model to use")
@@ -52,8 +50,16 @@ if __name__ == "__main__":
     sd_vae.eval()
 
     # Load data
-    datamodule = FFHQWeightedDataset(args, DataWeighter(args), sd_vae)
-    datamodule.set_mode("img")
+    datamodule = FFHQDataset(
+        args,
+        transform=transforms.Compose([
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomResizedCrop(size=256, scale=(0.9, 1.0)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        ]),
+        encoder=sd_vae
+    ).set_encode(True)
 
     # -- Initialize FID and Spectral metric ----------------------- #
 
@@ -63,16 +69,15 @@ if __name__ == "__main__":
 
     # Load validation dataset (workaround)
     val_filename_list = datamodule.val_dataloader().dataset.filename_list
-    val_dataset = MultiModeDataset(
+    val_dataset = OptEncodeDataset(
         val_filename_list,
-        mode_dirs={"img": args.img_dir},
+        img_dir=datamodule.img_dir,
         transform=transforms.Compose([
             transforms.Resize((256, 256)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ]),
     )
-    val_dataset.set_mode("img")
 
     # Fit metrics
     fid_instance.fit_real(val_dataset)

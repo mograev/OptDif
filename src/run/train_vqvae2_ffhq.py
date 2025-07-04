@@ -7,22 +7,14 @@ import pytorch_lightning as pl
 from torchvision import transforms
 
 from src.dataloader.ffhq import FFHQDataset
+from src.models.vqvae2 import VQVAE2
 from src.metrics.fid import FIDScore
 from src.metrics.spectral import SpectralScore
 from src.dataloader.utils import OptEncodeDataset
-from src.models.lit_vae import LitVAE
 
-from diffusers import AutoencoderKL
-
-# Set the multiprocessing start method to spawn
-import torch.multiprocessing as mp
-
-# Set the float32 matmul precision to medium
-# This is important for compatibility with certain hardware and software configurations
 torch.set_float32_matmul_precision("medium")
 
 if __name__ == "__main__":
-    mp.set_start_method("spawn", force=True)
 
     # -- Parse arguments ------------------------------------------ #
 
@@ -31,8 +23,8 @@ if __name__ == "__main__":
     parser = FFHQDataset.add_data_args(parser)
 
     # Direct arguments
-    parser.add_argument("--model_path", type=str, help="Path to the latent model")
-    parser.add_argument("--model_version", type=str, default="v1", help="Version of the model to use")
+    parser.add_argument("--model_version", type=str, help="Version of the latent model to use")
+    parser.add_argument("--model_config_path", type=str, help="Path to the model config file")
     parser.add_argument("--model_output_dir", type=str, help="Directory to save the model")
     parser.add_argument("--max_epochs", type=int, default=100, help="Maximum number of epochs to train the model")
     parser.add_argument("--device", type=str, default="cuda", help="Device to use for training (e.g., 'cuda' or 'cpu')")
@@ -53,13 +45,13 @@ if __name__ == "__main__":
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ])
-    ).set_encode(False)
+    )
 
     # -- Initialize FID and Spectral metric ----------------------- #
 
     # Initialize instances
-    fid_instance = FIDScore(img_size=256, device=args.device, batch_size=args.batch_size, num_workers=args.num_workers)
-    spectral_instance = SpectralScore(img_size=256, device=args.device, batch_size=args.batch_size, num_workers=args.num_workers)
+    fid_instance = FIDScore(img_size=256, device=args.device)
+    spectral_instance = SpectralScore(img_size=256, device=args.device)
 
     # Load validation dataset (workaround)
     val_filename_list = datamodule.val_dataloader().dataset.filename_list
@@ -77,16 +69,18 @@ if __name__ == "__main__":
     fid_instance.fit_real(val_dataset)
     spectral_instance.fit_real(val_dataset)
 
-    # -- Load model ----------------------------------------------- #
+    # -- Load latent model ---------------------------------------- #
 
-    # Load SD-VAE model
-    sd_vae = AutoencoderKL.from_pretrained(args.model_path, subfolder="vae")
-    sd_vae.train()
-    sd_vae.requires_grad_(True)
+    # Load model config
+    with open(args.model_config_path, "r") as f:
+        model_config = yaml.safe_load(f)
 
-    # Wrap in Lightning module
-    model = LitVAE(
-        model=sd_vae,
+    # Instantiate with the loaded configuration
+    model = VQVAE2(
+        ddconfig=model_config["ddconfig"],
+        lossconfig=model_config["lossconfig"],
+        learning_rate=model_config["learning_rate"],
+        ckpt_path="models/vqvae2/version_0/checkpoints/last.ckpt",
         fid_instance=fid_instance,
         spectral_instance=spectral_instance,
     )
@@ -116,7 +110,7 @@ if __name__ == "__main__":
     with torch.autograd.set_detect_anomaly(True):
         # Create trainer
         trainer = pl.Trainer(
-            accelerator="gpu" if args.device == "cuda" else "cpu",
+            accelerator="gpu",
             devices=args.num_devices if args.device == "cuda" else 1,
             strategy="ddp_find_unused_parameters_true" if args.device == "cuda" else None,
             max_epochs=args.max_epochs,
@@ -129,7 +123,3 @@ if __name__ == "__main__":
 
         # Fit model
         trainer.fit(model, datamodule)
-
-    # -- Save final model ----------------------------------------- #
-
-    model.model.save_pretrained(args.model_output_dir + f"version_{args.model_version}/huggingface")

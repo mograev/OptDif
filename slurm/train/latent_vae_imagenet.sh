@@ -6,7 +6,6 @@
 #SBATCH --time=7-00:00:00                    # Maximum runtime (hh:mm:ss)
 #SBATCH --partition=gpu20                    # Partition to submit the job to
 #SBATCH --gres=gpu:4                         # Request GPU resources
-#SBATCH --mem=0                              # Use all available memory
 
 # Dataloader
 img_dir="/BS/spectral-gan2/nobackup/ILSVRC2012"

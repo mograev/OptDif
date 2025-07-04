@@ -1,31 +1,26 @@
 #!/bin/bash
 
 #SBATCH --job-name=train_sd_lora          # Job name
-#SBATCH --output=logs/sd_lora/v5_%j.out   # Output log file
-#SBATCH --error=logs/sd_lora/v5_%j.err    # Error log file
-#SBATCH --time=8:00:00                   # Maximum runtime (hh:mm:ss)
+#SBATCH --output=logs/sd_lora/v7_%j.out   # Output log file
+#SBATCH --error=logs/sd_lora/v7_%j.err    # Error log file
+#SBATCH --time=12:00:00                   # Maximum runtime (hh:mm:ss)
 #SBATCH --partition=gpu24                 # Partition to submit the job to
 #SBATCH --gres=gpu:8                      # Request GPU resources
-#SBATCH --mem=0                           # Use all available memory
+#SBATCH --mem=512G                        # Request memory
 
 # Dataloader
 img_dir="data/ffhq/images1024x1024"
-img_tensor_dir="data/ffhq/pt_images"
 attr_path="data/ffhq/ffhq_smile_scores.json"
-max_property_value=5
+max_property_value=2
 min_property_value=0
 batch_size=16
 num_workers=8
 val_split=0.1
-data_device="cuda"
-
-# Weighter
-weight_type="uniform"
 
 # Model & Training
-model_version=5
+model_version=7
 model_output_dir="models/sd_lora/version_$model_version"
-struct_adapter="hed" # depth, hed, none
+struct_adapter="depth" # depth, hed, none
 max_epochs=100
 device="cuda"
 num_devices=8
@@ -42,16 +37,12 @@ accelerate launch \
     --mixed_precision "bf16" \
     src/run/train_sd_lora_ffhq.py \
     --img_dir $img_dir \
-    --img_tensor_dir $img_tensor_dir \
     --attr_path $attr_path \
     --max_property_value $max_property_value \
     --min_property_value $min_property_value \
     --batch_size $batch_size \
     --num_workers $num_workers \
     --val_split $val_split \
-    --data_device $data_device \
-    --aug \
-    --weight_type $weight_type \
     --model_version $model_version \
     --model_output_dir $model_output_dir \
     --struct_adapter $struct_adapter \
