@@ -5,6 +5,7 @@ data/ffhq/pt_images/
 data/ffhq/sd_latents/
 data/ffhq/ffhq-dataset-v2.json
 data/ffhq/sd_latents.pt
+data/ffhq/eval/batch_1024.pt
 
 # Demo
 demo/losses/
@@ -15,6 +16,7 @@ demo/losses/
 !/models/**/configs/ 
 !/models/**/configs/**
 taming/
+ControlNetHED.pth
 
 # Optimization results
 results/
