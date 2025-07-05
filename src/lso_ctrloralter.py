@@ -239,15 +239,15 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
 
     # Save points to file
     if args.opt_strategy in ["GP", "DNGO", "DNGO_PCA"]:
-        temp_targets = -temp_targets.reshape(-1, 1)  # Since it is a minimization problem
+        targets = -temp_targets.reshape(-1, 1)  # Since it is a minimization problem
     else:
-        temp_targets = temp_targets.reshape(-1, 1)
+        targets = temp_targets.reshape(-1, 1)
 
     # Save the file
     np.savez_compressed(
         data_file,
         X_train=latent_points.astype(np.float64),
-        y_train=temp_targets.astype(np.float64),
+        y_train=targets.astype(np.float64),
     )
 
     # Save old progress bar description
@@ -422,7 +422,7 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
     x_orig = None
     if args.sample_distribution == "train_data" and z_indices is not None:
         x_orig = [temp_dataset[int(idx)] for idx in z_indices]
-        y_orig = [temp_targets[int(idx)].item() for idx in z_indices]
+        y_orig = [temp_targets[int(idx)] for idx in z_indices]
 
     # Decode optimized points
     x_opt, y_opt = _decode_and_predict(
@@ -589,7 +589,6 @@ def main_loop(args):
         attr_file=args.predictor_attr_file,
         scaled=args.scaled_predictor,
         device=args.device,
-        logfile=result_dir / "predictor.log",
     )
 
     # Set up results tracking

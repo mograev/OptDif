@@ -13,7 +13,7 @@ seed=42
 
 # Dataloader
 img_dir="data/ffhq/images1024x1024"
-attr_path="data/ffhq/ffhq_smile_scores.json"
+attr_path="data/ffhq/smile_scores.json"
 max_property_value=2
 min_property_value=0
 batch_size=16
@@ -28,7 +28,7 @@ query_budget=50 #500
 retraining_frequency=5
 n_retrain_epochs=0 #0.1
 n_init_retrain_epochs=0 #1
-result_path="results/latent_vqvae_dngo_06/"
+result_path="results/latent_vqvae_dngo_07/"
 sd_vae_path="stabilityai/stable-diffusion-3.5-medium"
 latent_model_config_path="models/latent_vqvae/version_8_2/hparams.yaml"
 latent_model_ckpt_path="models/latent_vqvae/version_8_2/checkpoints/last.ckpt"
@@ -38,9 +38,9 @@ predictor_path="models/classifier/celeba_smile/predictor_128.pth.tar"
 # Optimization
 opt_strategy="DNGO"
 n_starts=20 #20
-n_samples=10000 # 10000
-n_rand_points=8000  #8000
-n_best_points=2000 #2000
+n_samples=100 # 10000
+n_rand_points=800  #8000
+n_best_points=200 #2000
 sample_distribution="train_data" # "uniform", "normal", or "train_data"
 opt_method="SLSQP"
 opt_constraint_threshold=-15000000 #100000000

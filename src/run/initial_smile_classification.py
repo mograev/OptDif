@@ -7,7 +7,7 @@ from src.classification.smile_classifier import SmileClassifier
 CLASSIFIER_PATH = "models/classifier/celeba_smile/predictor_128.pth.tar" # or scaled: "models/classifier/celeba_smile/predictor_128_scaled3.pth.tar"
 ATTR_FILE = "models/classifier/celeba_smile/attributes.json"
 IMAGE_PATH = "data/ffhq/images1024x1024/"
-OUTPUT_FILE = "data/ffhq/ffhq_smile_scores_scaled.json"
+OUTPUT_FILE = "data/ffhq/smile_scores.json" # or scaled: "data/ffhq/smile_scores_scaled.json"
 
 # Create classifier
 device = "cuda" if torch.cuda.is_available() else "cpu"

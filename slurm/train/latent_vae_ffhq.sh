@@ -10,7 +10,7 @@
 # Dataloader
 img_dir="data/ffhq/images1024x1024"
 img_tensor_dir="data/ffhq/pt_images"
-attr_path="data/ffhq/ffhq_smile_scores.json"
+attr_path="data/ffhq/smile_scores.json"
 max_property_value=5
 min_property_value=0
 batch_size=32
