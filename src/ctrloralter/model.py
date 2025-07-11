@@ -355,6 +355,35 @@ class ModelBase(ABC, nn.Module):
     def sample(self, *args, **kwargs):
         return self.pipe(*args, **kwargs).images
 
+    
+    def predict_phi(
+        self,
+        cond: torch.Tensor,
+        branch_idx: int = 0,
+        skip_encode: bool = False,
+    ) -> list[torch.Tensor]:
+        """
+        Returns the shared scale-and-shift fingerprints φ for each conditioning input.
+        Args:
+            cond: Tensor of shape (B, C) representing the conditioning input.
+            branch_idx: Index of the branch to use for encoding and mapping.
+            skip_encode: If True, skips the encoder step and uses the conditioning input directly.
+        Returns:
+            List of tensors, each of shape (B, C), representing the shared scale-and-shift fingerprints φ.
+        """
+        # 1) apply optional transforms
+        t = self.lora_transforms[branch_idx]
+        if t is not None:
+            cond = t(cond)
+
+        # 2) encode if needed
+        code = cond if skip_encode else self.encoders[branch_idx](cond)
+
+        # 3) forward through shared mapper for phi fingerprint
+        phi = self.mappers[branch_idx](code)   # shape [B, phi_dim]
+
+        return phi
+
 
 class SD15(ModelBase):
     def __init__(self, pipeline_type, model_name, *args, **kwargs) -> None:
@@ -536,34 +565,6 @@ class SD15(ModelBase):
             cfg_mask=cfg_mask,
             skip_encode=skip_encode,
         )
-    
-    def predict_phi(
-        self,
-        cond: torch.Tensor,
-        branch_idx: int = 0,
-        skip_encode: bool = False,
-    ) -> list[torch.Tensor]:
-        """
-        Returns the shared scale-and-shift fingerprints φ for each conditioning input.
-        Args:
-            cond: Tensor of shape (B, C) representing the conditioning input.
-            branch_idx: Index of the branch to use for encoding and mapping.
-            skip_encode: If True, skips the encoder step and uses the conditioning input directly.
-        Returns:
-            List of tensors, each of shape (B, C), representing the shared scale-and-shift fingerprints φ.
-        """
-        # 1) apply optional transforms
-        t = self.lora_transforms[branch_idx]
-        if t is not None:
-            cond = t(cond)
-
-        # 2) encode if needed
-        code = cond if skip_encode else self.encoders[branch_idx](cond)
-
-        # 3) forward through shared mapper for phi fingerprint
-        phi = self.mappers[branch_idx](code)   # shape [B, phi_dim]
-
-        return phi
 
     @torch.no_grad()
     def sample_custom(
@@ -615,33 +616,51 @@ class SD15(ModelBase):
         # add our lora conditioning
         for i, (encoder, dp, mapper, c) in enumerate(zip(self.encoders, self.dps, self.mappers, cs)):
 
+            # If conditioning tensor does not match batch size, repeat along batch dimension
             if c.shape[0] != batch_size:
                 assert c.shape[0] == 1
                 c = torch.cat(batch_size * [c])  # repeat along batch dim
+            
+            # Build the unconditioned tensor pair.
+            uncond_c = torch.zeros(
+                (c.shape[0], 3, 512, 512),
+                device=c.device,
+                dtype=c.dtype,
+            )
+            use_cfg = self.guidance_scale > 1 and (cfg_mask is None or cfg_mask[i])
 
-            neg_c = torch.zeros_like(c)
-            if cfg_mask is not None and not cfg_mask[i]:
-                print("no cfg for lora nr", i)
-                c = torch.cat([c, c])
-            else:
-                c = torch.cat([neg_c, c])
-
+            # Always encode and map negative conditioning
+            if use_cfg:
+                uncond_enc = encoder(uncond_c)
+                uncond_map = mapper(uncond_enc)
+            
+            # # Optionally encode and map positive conditioning
             if i in skip_encode_branches:
-                cond = c
+                cond_enc = c
             else:
-                cond = encoder(c)
+                cond_enc = encoder(c)
 
             if i in skip_mapping_branches:
-                mapped_cond = cond
+                cond_map = cond_enc
             else:
-                mapped_cond = mapper(cond)
+                cond_map = mapper(cond_enc)
 
-            if isinstance(mapped_cond, tuple) or isinstance(mapped_cond, list):
-                mapped_cond = [mc.to(dtype) for mc in mapped_cond]
+            if use_cfg:
+                if isinstance(cond_map, tuple) or isinstance(cond_map, list):
+                    c_pair = [
+                        torch.cat([uncond_map[j], cond_map[j]]).to(dtype) for j in range(len(cond_map))
+                    ]
+                else:
+                    c_pair = torch.cat([uncond_map, cond_map])
             else:
-                mapped_cond = mapped_cond.to(dtype)
+                if isinstance(cond_map, tuple) or isinstance(cond_map, list):
+                    c_pair = [
+                        torch.cat([cond_map[j], cond_map[j]]).to(dtype) for j in range(len(cond_map))
+                    ]
+                else:
+                    c_pair = torch.cat([cond_map, cond_map])
 
-            dp.set_batch(mapped_cond)
+            dp.set_batch(c_pair)
 
         # 4. Prepare timesteps
         timesteps, num_inference_steps = retrieve_timesteps(self.pipe.scheduler, 50, device)
@@ -967,6 +986,93 @@ class SDXL(ModelBase):
             #     mapped_cond = mapped_cond.to(dtype)
 
             dp.set_batch(mapped_cond)
+
+        return self.pipe(
+            prompt=prompt,
+            num_images_per_prompt=num_images_per_prompt,
+            generator=generator,
+            guidance_scale=self.guidance_scale,
+            prompt_embeds=prompt_embeds,
+            pooled_prompt_embeds=pooled_prompt_embeds,
+            **kwargs,
+        ).images
+    
+
+    def sample_custom(
+        self,
+        prompt,
+        num_images_per_prompt,
+        cs: list[torch.Tensor],
+        generator,
+        cfg_mask: list[bool] | None = None,
+        prompt_offset_step: int = 0,
+        skip_encode: list[int] | bool = False,
+        skip_mapping: list[int] | bool = False,
+        **kwargs,
+    ):
+        # Handle skip_encode and skip_mapping
+        if isinstance(skip_encode, bool):
+            skip_encode_branches = list(range(len(self.encoders))) if skip_encode else []
+        elif isinstance(skip_encode, list):
+            skip_encode_branches = skip_encode
+        if isinstance(skip_mapping, bool):
+            skip_mapping_branches = list(range(len(self.mappers))) if skip_mapping else []
+        elif isinstance(skip_mapping, list):
+            skip_mapping_branches = skip_mapping
+
+        if prompt is not None and isinstance(prompt, str):
+            batch_size = 1
+        elif prompt is not None and isinstance(prompt, list):
+            batch_size = len(prompt)
+
+        batch_size = batch_size * num_images_per_prompt
+
+        device = self.unet.device
+
+        prompt_embeds = None
+        pooled_prompt_embeds = None
+
+        # we have to do two separate forward passes for the cfg with the loras
+        # add our lora conditioning
+        for i, (encoder, dp, mapper, c) in enumerate(zip(self.encoders, self.dps, self.mappers, cs)):
+
+            # If conditioning tensor does not match batch size, repeat along batch dimension
+            if c.shape[0] != batch_size:
+                assert c.shape[0] == 1
+                c = torch.cat(batch_size * [c])  # repeat along batch dim
+
+            # Build the unconditioned tensor pair.
+            uncond_c = torch.zeros(
+                (c.shape[0], 3, 1024, 1024),
+                device=c.device,
+                dtype=c.dtype,
+            )
+            use_cfg = self.guidance_scale > 1 and (cfg_mask is None or cfg_mask[i])
+
+            # Always encode and map negative conditioning
+            if use_cfg:
+                uncond_enc = encoder(uncond_c)
+                uncond_map = mapper(uncond_enc)
+
+            # Optionally encode and map positive conditioning
+            if i in skip_encode_branches:
+                cond_enc = c
+            else:
+                cond_enc = encoder(c)
+
+            if i in skip_mapping_branches:
+                cond_map = cond_enc
+            else:
+                cond_map = mapper(cond_enc)
+
+            # Concatenate the (un)conditioned tensors
+            if use_cfg:
+                c_pair = torch.cat([uncond_map, cond_map])
+            else:
+                print("no cfg for lora nr", i)
+                c_pair = torch.cat([cond_map, cond_map])
+
+            dp.set_batch(c_pair)
 
         return self.pipe(
             prompt=prompt,
