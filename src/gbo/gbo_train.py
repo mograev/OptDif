@@ -164,7 +164,8 @@ def train_gbo(
     # Early stopping parameters
     best_loss = float('inf')
     no_improve = 0
-    patience = 1_000  # stop if no improvement in this many steps
+    epoch_len = len(loader)
+    patience = 5 * epoch_len  # stop if no improvement for 5 epochs
 
     # Store best model state
     best_model_state = model.state_dict()

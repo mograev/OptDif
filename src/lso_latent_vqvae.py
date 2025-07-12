@@ -71,9 +71,8 @@ def add_opt_args(parser):
     # BO arguments (used for both DNGO and GP)
     bo_group = parser.add_argument_group("BO")
     bo_group.add_argument("--n_samples", type=int, default=10000, help="Number of samples to draw from sample distribution")
-    bo_group.add_argument("--opt_method", type=str, default="SLSQP", choices=["SLSQP", "COBYLA", "L-BFGS-B"], help="Optimization method to use: 'SLSQP', 'COBYLA' 'L-BFGS-B'")
-    bo_group.add_argument("--opt_constraint_threshold", type=float, default=None, help="Log-density threshold for optimization constraint")
-    bo_group.add_argument("--opt_constraint_strategy", type=str, default="gmm_fit", help="Strategy for optimization constraint: only 'gmm_fit' is implemented")
+    bo_group.add_argument("--opt_method", type=str, default="SLSQP", choices=["SLSQP", "COBYLA", "L-BFGS-B", "trust-constr"], help="Optimization method to use: 'SLSQP', 'COBYLA' 'L-BFGS-B'")
+    bo_group.add_argument("--opt_constraint", type=str, default="GMM", help="Strategy for optimization constraint: only 'GMM' is implemented")
     bo_group.add_argument("--n_gmm_components", type=int, default=None, help="Number of components used for GMM fitting")
     bo_group.add_argument("--sparse_out", type=bool, default=True, help="Whether to filter out duplicate outputs")
 
@@ -169,10 +168,6 @@ def _choose_best_rand_points(args, dataset):
             chosen_point_set.add(i)
     assert len(chosen_point_set) == (args.n_rand_points + args.n_best_points)
     chosen_points = sorted(list(chosen_point_set))
-
-    # TEMPORARY TEST: double num of points per iteration
-    args.n_rand_points += 800
-    args.n_best_points += 200
 
     return chosen_points
 
@@ -414,9 +409,8 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
             f"--sparse_out={args.sparse_out}"
         ]
 
-        if args.opt_constraint_threshold is not None:
-            bo_opt_command.append(f"--opt_constraint_threshold={args.opt_constraint_threshold}")
-            bo_opt_command.append(f"--opt_constraint_strategy={args.opt_constraint_strategy}")
+        if args.opt_constraint is not None:
+            bo_opt_command.append(f"--opt_constraint={args.opt_constraint}")
             bo_opt_command.append(f"--n_gmm_components={args.n_gmm_components}")
 
         if args.feature_selection != "None":

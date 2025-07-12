@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #SBATCH --job-name=lso_latent_vqvae_dngo               # Job name
-#SBATCH --output=logs/lso/latent_vqvae_dngo_06_%j.out  # Output log file
-#SBATCH --error=logs/lso/latent_vqvae_dngo_06_%j.err   # Error log file
+#SBATCH --output=logs/lso/latent_vqvae_dngo_07_%j.out  # Output log file
+#SBATCH --error=logs/lso/latent_vqvae_dngo_07_%j.err   # Error log file
 #SBATCH --time=6:00:00                                 # Maximum runtime (hh:mm:ss)
 #SBATCH --partition=gpu20                              # Partition to submit the job to
 #SBATCH --gres=gpu:1                                   # Request GPU resources
@@ -37,21 +37,20 @@ predictor_path="models/classifier/celeba_smile/predictor_128.pth.tar"
 
 # Optimization
 opt_strategy="DNGO"
-n_starts=20 #20
-n_samples=100 # 10000
-n_rand_points=800  #8000
-n_best_points=200 #2000
+n_starts=5 #20
+n_samples=1000 # 10000
+n_rand_points=8000  #8000
+n_best_points=2000 #2000
 sample_distribution="train_data" # "uniform", "normal", or "train_data"
-opt_method="SLSQP"
-opt_constraint_threshold=-15000000 #100000000
-opt_constraint_strategy="gmm_fit"
+opt_method="trust-constr" # "trust-constr", "L-BFGS-B", "COBYLA", "SLSQP"
+opt_constraint="GMM"
 n_gmm_components=10
 sparse_out=True
 
 # Feature Selection
-feature_selection="None" # "FI", "PCA", "None"
-feature_selection_dims=512
-feature_selection_model_path="models/feature_selection/latents_fi_model.pkl"
+feature_selection="None" # "FI", "None"
+feature_selection_dims=128
+feature_selection_model_path="models/feature_selection/fi_latent_vqvae_512.pkl"
 
 # Initialize Conda for the current shell
 eval "$(conda shell.bash hook)"
@@ -60,7 +59,7 @@ eval "$(conda shell.bash hook)"
 conda activate optdif1
 
 # Run the Python script with specified arguments
-CUDA_VISIBLE_DEVICES=0 python src/lso_latent_vqvae.py \
+CUDA_VISIBLE_DEVICES=1 python src/lso_latent_vqvae.py \
     --device $device \
     --seed $seed \
     --img_dir $img_dir \
@@ -88,8 +87,7 @@ CUDA_VISIBLE_DEVICES=0 python src/lso_latent_vqvae.py \
     --n_best_points $n_best_points \
     --sample_distribution $sample_distribution \
     --opt_method $opt_method \
-    --opt_constraint_threshold $opt_constraint_threshold \
-    --opt_constraint_strategy $opt_constraint_strategy \
+    --opt_constraint $opt_constraint \
     --n_gmm_components $n_gmm_components \
     --sparse_out $sparse_out \
     --feature_selection $feature_selection \

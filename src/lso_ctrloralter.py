@@ -54,6 +54,10 @@ def add_wr_args(parser):
     wr_group.add_argument("--n_retrain_epochs", type=float, default=1., help="number of epochs to retrain for")
     wr_group.add_argument("--n_init_retrain_epochs", type=float, default=None, help="None to use n_retrain_epochs, 0.0 to skip init retrain")
 
+    # CTRLorALTer arguments
+    wr_group.add_argument("--style_ckpt_path", type=str, default=None, help="path to the style LoRA checkpoint")
+    wr_group.add_argument("--struct_ckpt_path", type=str, default=None, help="path to the structure LoRA checkpoint")
+
     return parser
 
 # Optimization arguments
@@ -75,8 +79,7 @@ def add_opt_args(parser):
     bo_group = parser.add_argument_group("BO")
     bo_group.add_argument("--n_samples", type=int, default=10000, help="Number of samples to draw from sample distribution")
     bo_group.add_argument("--opt_method", type=str, default="SLSQP", choices=["SLSQP", "COBYLA", "L-BFGS-B"], help="Optimization method to use: 'SLSQP', 'COBYLA' 'L-BFGS-B'")
-    bo_group.add_argument("--opt_constraint_threshold", type=float, default=None, help="Log-density threshold for optimization constraint")
-    bo_group.add_argument("--opt_constraint_strategy", type=str, default="gmm_fit", help="Strategy for optimization constraint: only 'gmm_fit' is implemented")
+    bo_group.add_argument("--opt_constraint", type=str, default="GMM", help="Strategy for optimization constraint: only 'GMM' is implemented")
     bo_group.add_argument("--n_gmm_components", type=int, default=None, help="Number of components used for GMM fitting")
     bo_group.add_argument("--sparse_out", type=bool, default=True, help="Whether to filter out duplicate outputs")
 
@@ -135,6 +138,10 @@ def _choose_best_rand_points(args, dataset):
             chosen_point_set.add(i)
     assert len(chosen_point_set) == (args.n_rand_points + args.n_best_points)
     chosen_points = sorted(list(chosen_point_set))
+
+    # TEMPORARY TEST: double num of points per iteration
+    # args.n_rand_points += 800
+    # args.n_best_points += 200
 
     return chosen_points
 
@@ -339,9 +346,8 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
             f"--sparse_out={args.sparse_out}"
         ]
 
-        if args.opt_constraint_threshold is not None:
-            bo_opt_command.append(f"--opt_constraint_threshold={args.opt_constraint_threshold}")
-            bo_opt_command.append(f"--opt_constraint_strategy={args.opt_constraint_strategy}")
+        if args.opt_constraint is not None:
+            bo_opt_command.append(f"--opt_constraint={args.opt_constraint}")
             bo_opt_command.append(f"--n_gmm_components={args.n_gmm_components}")
 
         if args.feature_selection != "None":
@@ -510,8 +516,7 @@ def main_loop(args):
                 "style": {
                     "enable": "always",
                     "optimize": False,
-                    "ckpt_path": "/BS/optdif/work/src/ctrloralter/checkpoints/sd15-style-cross-160-h", # initial style
-                    # "ckpt_path": "/BS/optdif/work/models/sd_lora/version_2/checkpoints/epoch_036", # finetuned style
+                    "ckpt_path": args.style_ckpt_path,
                     "ignore_check": False,
                     "cfg": True,
                     "transforms": [],
@@ -530,12 +535,10 @@ def main_loop(args):
         }
         # Optionally load structure adapter
         if args.struct_adapter == "depth":
-            # raw_cfg["lora"]["style"]["ckpt_path"] = "/BS/optdif/work/models/sd_lora/version_3/checkpoints/epoch_000" # finetuned style (from joint finetuning)
             raw_cfg["lora"]["struct"] = {
                     "enable": "always",
                     "optimize": False,
-                    "ckpt_path": "ctrloralter/checkpoints/sd15-depth-128-only-res", # initial depth
-                    # "ckpt_path": "/BS/optdif/work/models/sd_lora/version_3/checkpoints/epoch_000", # finetuned depth (from joint finetuning)
+                    "ckpt_path": args.struct_ckpt_path,
                     "ignore_check": False,
                     "cfg": False,
                     "transforms": [],
@@ -550,12 +553,10 @@ def main_loop(args):
                     "mapper_network": FixedStructureMapper15(c_dim=128),
                 }
         elif args.struct_adapter == "hed":
-            # raw_cfg["lora"]["style"]["ckpt_path"] = "/BS/optdif/work/models/sd_lora/version_6/checkpoints/epoch_000" # finetuned style (from joint finetuning)
             raw_cfg["lora"]["struct"] = {
                     "enable": "always",
                     "optimize": False,
-                    "ckpt_path": "/BS/optdif/work/src/ctrloralter/checkpoints/sd15-hed-128-only-res", # initial HED
-                    # "ckpt_path": "/BS/optdif/work/models/sd_lora/version_6/checkpoints/epoch_000", # finetuned HED (from joint finetuning)
+                    "ckpt_path": args.struct_ckpt_path,
                     "ignore_check": False,
                     "cfg": False,
                     "transforms": [],
@@ -623,7 +624,6 @@ def main_loop(args):
             samples_so_far = args.retraining_frequency * ret_idx
 
             # Retraining
-            datamodule.set_mode("img_tensor")
             num_epochs = args.n_retrain_epochs
             if ret_idx == 0 and args.n_init_retrain_epochs is not None:
                 # default: initial fine-tuning of pre-trained model for 1 epoch

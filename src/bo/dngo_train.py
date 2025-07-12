@@ -1,6 +1,5 @@
 """
-Training DNGO model. Supports MCMC sampling.
-Source: https://github.com/janschwedhelm/master-thesis/blob/main/src/dngo/dngo_train.py
+Training DNGO model.
 """
 
 import logging
@@ -76,6 +75,10 @@ def dngo_train(
     y_train = y_train.reshape(y_train.shape[0])
     logger.info(f"X_train shape: {X_train.shape}, y_train shape: {y_train.shape}")
 
+    # Data statistics
+    logger.info(f"X_train stats: mean {X_train.mean()}, std {X_train.std()}, min {X_train.min()}, max {X_train.max()}")
+    logger.info(f"y_train stats: mean {y_train.mean()}, std {y_train.std()}, min {y_train.min()}, max {y_train.max()}")
+
     # -- Optional feature selection ------------------------------- #
     if feature_selection == "PCA":
         # If model path is provided, load pre-trained PCA model, else fit PCA on the training data
@@ -124,7 +127,11 @@ def dngo_train(
 
     # -- Train DNGO Model ----------------------------------------- #
     # Initialize DNGO model
-    model = DNGO(normalize_input=normalize_input, normalize_output=normalize_output, do_mcmc=do_mcmc)
+    model = DNGO(normalize_input=normalize_input, normalize_output=normalize_output, device=device)
+
+    # Convert data to torch tensors
+    X_train = torch.tensor(X_train, dtype=torch.float32, device=device)
+    y_train = torch.tensor(y_train, dtype=torch.float32, device=device)
 
     logger.info("Start model fitting")
     start_time = time.time()

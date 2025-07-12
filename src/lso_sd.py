@@ -56,7 +56,7 @@ def add_opt_args(parser):
 
     # Common arguments
     opt_group = parser.add_argument_group("Optimization")
-    opt_group.add_argument("--opt_strategy", type=str, choices=["GBO", "DNGO", "GP", "GBO_PCA", "GBO_FI"], help="Optimization strategy to use")
+    opt_group.add_argument("--opt_strategy", type=str, choices=["GBO", "DNGO", "GP"], help="Optimization strategy to use")
     opt_group.add_argument("--n_starts", type=int, default=20, help="Number of optimization runs with different initial values")
     opt_group.add_argument("--n_rand_points", type=int, default=8000, help="Number of random points to sample for surrogate model training")
     opt_group.add_argument("--n_best_points", type=int, default=2000, help="Number of best points to sample for surrogate model training")
@@ -68,9 +68,8 @@ def add_opt_args(parser):
     # BO arguments (used for both DNGO and GP)
     bo_group = parser.add_argument_group("BO")
     bo_group.add_argument("--n_samples", type=int, default=10000, help="Number of samples to draw from sample distribution")
-    bo_group.add_argument("--opt_method", type=str, default="SLSQP", choices=["SLSQP", "COBYLA", "L-BFGS-B"], help="Optimization method to use: 'SLSQP', 'COBYLA' 'L-BFGS-B'")
-    bo_group.add_argument("--opt_constraint_threshold", type=float, default=None, help="Log-density threshold for optimization constraint")
-    bo_group.add_argument("--opt_constraint_strategy", type=str, default="gmm_fit", help="Strategy for optimization constraint: only 'gmm_fit' is implemented")
+    bo_group.add_argument("--opt_method", type=str, default="SLSQP", choices=["SLSQP", "COBYLA", "L-BFGS-B", "trust-constr"], help="Optimization method to use: 'SLSQP', 'COBYLA' 'L-BFGS-B'")
+    bo_group.add_argument("--opt_constraint", type=str, default="GMM", help="Strategy for optimization constraint: only 'GMM' is implemented")
     bo_group.add_argument("--n_gmm_components", type=int, default=None, help="Number of components used for GMM fitting")
     bo_group.add_argument("--sparse_out", type=bool, default=True, help="Whether to filter out duplicate outputs")
 
@@ -340,6 +339,8 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
                 f"--save_file={str(new_bo_file)}",
                 f"--logfile={str(log_path)}",
                 f"--device={args.device}",
+                f"--normalize_input",
+                f"--normalize_output",
             ]
 
             # Append feature selection arguments if specified
@@ -378,9 +379,8 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
             f"--sparse_out={args.sparse_out}"
         ]
 
-        if args.opt_constraint_threshold is not None:
-            bo_opt_command.append(f"--opt_constraint_threshold={args.opt_constraint_threshold}")
-            bo_opt_command.append(f"--opt_constraint_strategy={args.opt_constraint_strategy}")
+        if args.opt_constraint is not None:
+            bo_opt_command.append(f"--opt_constraint={args.opt_constraint}")
             bo_opt_command.append(f"--n_gmm_components={args.n_gmm_components}")
 
         if args.feature_selection != "None":

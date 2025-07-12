@@ -1,11 +1,12 @@
 #!/bin/bash
 
 #SBATCH --job-name=lso_ctrloralter_dngo               # Job name
-#SBATCH --output=logs/lso/ctrloralter_dngo_04_%j.out  # Output log file
-#SBATCH --error=logs/lso/ctrloralter_dngo_04_%j.err   # Error log file
+#SBATCH --output=logs/lso/ctrloralter_dngo_06_%j.out  # Output log file
+#SBATCH --error=logs/lso/ctrloralter_dngo_06_%j.err   # Error log file
 #SBATCH --time=6:00:00                                # Maximum runtime (hh:mm:ss)
 #SBATCH --partition=gpu20                             # Partition to submit the job to
 #SBATCH --gres=gpu:1                                  # Request GPU resources
+#SBATCH --exclude=gpu20-45
 
 # Device and seed
 device="cuda"
@@ -28,22 +29,21 @@ query_budget=50 #500
 retraining_frequency=5
 n_retrain_epochs=0 #0.1
 n_init_retrain_epochs=0 #1
-result_path="results/ctrloralter_dngo_04/"
+result_path="results/ctrloralter_dngo_06/"
 sd_path="runwayml/stable-diffusion-v1-5"
-struct_adapter="hed" # depth, hed, none
+struct_adapter="depth" # depth, hed, none
 predictor_attr_file="models/classifier/celeba_smile/attributes.json"
 predictor_path="models/classifier/celeba_smile/predictor_128.pth.tar"
 
 # Optimization
 opt_strategy="DNGO"
-n_rand_points=8000 #8000
-n_best_points=2000 #2000
+n_rand_points=800 #8000
+n_best_points=200 #2000
 n_starts=20 #20
 n_samples=1000
-sample_distribution="normal" # "train_data", "uniform", "normal"
-opt_method="SLSQP"
-opt_constraint_threshold=-100000000 #-1e8
-opt_constraint_strategy="gmm_fit"
+sample_distribution="train_data" # "train_data", "uniform", "normal"
+opt_method="SLSQP" # SLSQP, COBYLA, L-BFGS-B
+opt_constraint="GMM"
 n_gmm_components=10
 sparse_out=True
 
@@ -81,8 +81,7 @@ CUDA_VISIBLE_DEVICES=0 python src/lso_ctrloralter.py \
     --n_samples $n_samples \
     --sample_distribution $sample_distribution \
     --opt_method $opt_method \
-    --opt_constraint_threshold $opt_constraint_threshold \
-    --opt_constraint_strategy $opt_constraint_strategy \
+    --opt_constraint $opt_constraint \
     --n_gmm_components $n_gmm_components \
     --sparse_out $sparse_out \
     "$@"
