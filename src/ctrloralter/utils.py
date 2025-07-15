@@ -50,7 +50,7 @@ def add_lora_from_config(model, cfg: Any, device: torch.device, dtype: torch.dty
     cfg_mask: list[bool] = []
 
     global_ckpt_path = cfg.get("ckpt_path", None)
-    project_root = Path(os.path.abspath(__file__)).parent.parent
+    project_root = Path.cwd()
 
     for name, l in cfg.lora.items():
         if l.get("enable", "always") == "never":

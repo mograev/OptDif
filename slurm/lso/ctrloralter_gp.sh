@@ -35,6 +35,18 @@ struct_adapter="depth" # depth, hed, none
 predictor_attr_file="models/classifier/celeba_smile/attributes.json"
 predictor_path="models/classifier/celeba_smile/predictor_128.pth.tar"
 
+# CTRLorALTer checkpoint paths
+# Initial:
+# - Style: "src/ctrloralter/checkpoints/sd15-style-cross-160-h"
+# - Depth: "src/ctrloralter/checkpoints/sd15-depth-128-only-res"
+# - HED: "src/ctrloralter/checkpoints/sd15-hed-128-only-res"
+# Finetuned:
+# - Style: "models/sd_lora/version_9/checkpoints/epoch_053"
+# - Style+Depth: "models/sd_lora/version_7/checkpoints/epoch_053"
+# - Style+HED: "models/sd_lora/version_8/checkpoints/epoch_053"
+style_ckpt_path="models/sd_lora/version_7/checkpoints/epoch_053"
+struct_ckpt_path="models/sd_lora/version_7/checkpoints/epoch_053"
+
 # Optimization
 opt_strategy="GP"
 n_rand_points=8000 #8000
@@ -74,6 +86,8 @@ CUDA_VISIBLE_DEVICES=0 python src/lso_ctrloralter.py \
     --struct_adapter $struct_adapter \
     --predictor_attr_file $predictor_attr_file \
     --predictor_path $predictor_path \
+    --style_ckpt_path $style_ckpt_path \
+    --struct_ckpt_path $struct_ckpt_path \
     --opt_strategy $opt_strategy \
     --n_rand_points $n_rand_points \
     --n_best_points $n_best_points \

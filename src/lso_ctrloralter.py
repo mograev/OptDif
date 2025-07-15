@@ -165,7 +165,7 @@ def _decode_and_predict(sd_model, predictor, z, device, x_orig=None, cfg_mask=No
                 prompt="",
                 num_images_per_prompt=latents.shape[0],
                 cs=[latents, x_orig] if x_orig is not None else [latents],
-                generator=Generator(device=device).manual_seed(42),
+                generator=Generator(device=device),
                 cfg_mask=cfg_mask,
                 skip_encode=[0],
                 skip_mapping=[0],
@@ -262,6 +262,8 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
         old_desc = pbar.desc
 
     iter_seed = int(np.random.randint(10000))
+
+    logger.debug(f"Iteration seed: {iter_seed}")
 
     # -- Optimization based on strategy --------------------------- #
 
@@ -474,7 +476,7 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
 def main_loop(args):
 
     # Seeding
-    pl.seed_everything(args.seed)
+    pl.seed_everything(args.seed, workers=True)
 
     # Make result directory
     result_dir = Path(args.result_path).resolve()
@@ -488,7 +490,7 @@ def main_loop(args):
 
     # Setup logging
     setup_logger(result_dir / "main.log")
-    
+
     # Load datamodule
     datamodule = FFHQDataset(
         args,

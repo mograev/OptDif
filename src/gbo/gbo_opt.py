@@ -12,7 +12,6 @@ import numpy as np
 import torch
 from sklearn.decomposition import PCA
 
-from src.metrics.feature_importance import compute_feature_importance_from_data, compute_feature_importance_from_model
 from src.gbo.gbo_model import GBOModel
 from src.utils import zero_mean_unit_var_normalization, zero_mean_unit_var_denormalization
 
@@ -316,6 +315,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
+    np.random.seed(args.seed)
 
     opt_gbo(
         logfile=args.logfile,
