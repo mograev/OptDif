@@ -27,7 +27,7 @@ from src.dataloader.ffhq import FFHQDataset
 from src.dataloader.utils import OptEncodeDataset
 from src.dataloader.weighting import DataWeighter
 from src.classification.smile_classifier import SmileClassifier
-from src.ctrloralter.model import SD15
+from src.ctrloralter.model import SD15, SDXL
 from src.ctrloralter.annotators.openclip import VisionModel
 from src.ctrloralter.annotators.midas import DepthEstimator
 from src.ctrloralter.annotators.hed import TorchHEDdetector
@@ -179,7 +179,7 @@ def _decode_and_predict(sd_model, predictor, z, device, x_orig=None, cfg_mask=No
             # Normalize and downsample images
             img_tensors = img_tensors.float() / 255.0
             img_tensors = (img_tensors - 0.5) / 0.5  # Normalize to [-1, 1]
-            img_tensors = torch.nn.functional.interpolate(img_tensors, size=(512, 512), mode='bilinear', align_corners=False)
+            img_tensors = torch.nn.functional.interpolate(img_tensors, size=(sd_model.img_size, sd_model.img_size), mode='bilinear', align_corners=False)
 
             z_decode.append(img_tensors)
 
@@ -262,7 +262,6 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
         old_desc = pbar.desc
 
     iter_seed = int(np.random.randint(10000))
-
     logger.debug(f"Iteration seed: {iter_seed}")
 
     # -- Optimization based on strategy --------------------------- #
@@ -490,26 +489,15 @@ def main_loop(args):
 
     # Setup logging
     setup_logger(result_dir / "main.log")
-
-    # Load datamodule
-    datamodule = FFHQDataset(
-        args,
-        DataWeighter(args),
-        transform=transforms.Compose([
-            transforms.Resize(size=512),
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-        ])
-    )
     
     # Load pre-trained SD-VAE model
     if args.sd_path == "runwayml/stable-diffusion-v1-5":
-        sd15 = SD15(
+        sd_model = SD15(
             pipeline_type="diffusers.StableDiffusionPipeline",
             model_name="runwayml/stable-diffusion-v1-5",
             local_files_only=False,
         )
-        sd15.eval()
+        sd_model.eval()
 
         # Connect LoRa weights to the SD15 model
         raw_cfg = {
@@ -572,19 +560,64 @@ def main_loop(args):
                     "encoder": TorchHEDdetector(size=512, local_files_only=False),
                     "mapper_network": FixedStructureMapper15(c_dim=128),
                 }
-        
-        # Wrap in OmegaConf
-        cfg = OmegaConf.create(raw_cfg, flags={"allow_objects": True})
 
-        # Add LoRa weights to the model
-        cfg_mask = add_lora_from_config(
-            sd15,
-            cfg,
-            device=args.device,
-        )
+    elif args.sd_path == "stabilityai/stable-diffusion-xl-base-1.0":
+        sd_model = SDXL(
+            pipeline_type="diffusers.StableDiffusionXLPipeline",
+            model_name="stabilityai/stable-diffusion-xl-base-1.0",
+            local_files_only=False,
+            guidance_scale=10,
+        ).eval()
 
+        # Connect LoRa weights to the SDXL model
+        raw_cfg = {
+            "ckpt_path": "ctrloralter/checkpoints",
+            "ignore_check": False,
+            "lora": {
+                "style": {
+                    "enable": "always",
+                    "optimize": False,
+                    "ckpt_path": args.style_ckpt_path,
+                    "cfg": True,
+                    "transforms": [],
+                    "config": {
+                        "lora_scale": 1.0,
+                        "rank": 256,
+                        "c_dim": 1024,
+                        "adaption_mode": "b-lora",
+                        "lora_cls": "SimpleLoraLinear",
+                    },
+                    "encoder": VisionModel(clip_model="laion/CLIP-ViT-H-14-laion2B-s32B-b79K", local_files_only=False),
+                    "mapper_network": SimpleMapper(d_model=1024, c_dim=1024)
+                }
+            }
+        }
+    
     else:
-        raise ValueError("Unsupported SD-VAE path. Please use 'runwayml/stable-diffusion-v1-5'.")
+        raise ValueError(f"Unsupported SD path: {args.sd_path}")
+
+    # Wrap in OmegaConf
+    cfg = OmegaConf.create(raw_cfg, flags={"allow_objects": True})
+
+    # Add LoRa weights to the model
+    cfg_mask = add_lora_from_config(
+        sd_model,
+        cfg,
+        device=args.device,
+    )
+
+    # Load datamodule
+    img_size = 512 if args.sd_path == "runwayml/stable-diffusion-v1-5" else 1024
+    datamodule = FFHQDataset(
+        args,
+        DataWeighter(args),
+        transform=transforms.Compose([
+            transforms.Resize(size=img_size),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
+        ])
+    )
+    sd_model.img_size = img_size
 
     # Load pretrained (temperature-scaled) predictor
     predictor = SmileClassifier(
@@ -610,7 +643,7 @@ def main_loop(args):
     )
 
     # Save retraining hyperparameters in YAML format
-    with open(result_dir / "retraining_hparams.yaml", "w") as f:
+    with open(result_dir / "hparams.yaml", "w") as f:
         yaml.dump(args.__dict__, f, default_flow_style=False)
 
     # Main loop
@@ -656,7 +689,7 @@ def main_loop(args):
             # Perform latent optimization
             lso_results = latent_optimization(
                 args,
-                sd15,
+                sd_model,
                 predictor,
                 datamodule,
                 num_queries_to_do,

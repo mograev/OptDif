@@ -293,6 +293,7 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
         old_desc = pbar.desc
 
     iter_seed = int(np.random.randint(10000))
+    logger.debug(f"Iteration seed: {iter_seed}")
 
     # -- Optimization based on strategy --------------------------- #
 
@@ -572,7 +573,7 @@ def main_loop(args):
     )
 
     # Save retraining hyperparameters in YAML format
-    with open(result_dir / "retraining_hparams.yaml", "w") as f:
+    with open(result_dir / "hparams.yaml", "w") as f:
         yaml.dump(args.__dict__, f, default_flow_style=False)
 
     # Main loop

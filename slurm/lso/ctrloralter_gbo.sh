@@ -29,26 +29,32 @@ retraining_frequency=5
 n_retrain_epochs=0 #0.1
 n_init_retrain_epochs=0 #1
 result_path="results/ctrloralter_gbo_30/"
-sd_path="runwayml/stable-diffusion-v1-5"
-struct_adapter="depth" # depth, hed, none
 predictor_attr_file="models/classifier/celeba_smile/attributes.json"
 predictor_path="models/classifier/celeba_smile/predictor_128.pth.tar"
 
-# CTRLorALTer checkpoint paths
-# Initial:
-# - Style: "src/ctrloralter/checkpoints/sd15-style-cross-160-h"
-# - Depth: "src/ctrloralter/checkpoints/sd15-depth-128-only-res"
-# - HED: "src/ctrloralter/checkpoints/sd15-hed-128-only-res"
-# Finetuned:
-# - Style: "models/sd_lora/version_9/checkpoints/epoch_053"
-# - Style+Depth: "models/sd_lora/version_7/checkpoints/epoch_053"
-# - Style+HED: "models/sd_lora/version_8/checkpoints/epoch_053"
-style_ckpt_path="models/sd_lora/version_7/checkpoints/epoch_053"
+# Stable Diffusion model path
+# - SD15: "runwayml/stable-diffusion-v1-5"
+# - SDXL: "stabilityai/stable-diffusion-xl-base-1.0"
+sd_path="stabilityai/stable-diffusion-xl-base-1.0"
+# Optional Adapter (only for SD15):
+struct_adapter="none" # depth, hed, none
+# Checkpoint paths:
+# - SD15
+#   - Initial:
+#       - Style: "src/ctrloralter/checkpoints/sd15-style-cross-160-h"
+#       - Depth: "src/ctrloralter/checkpoints/sd15-depth-128-only-res"
+#       - HED: "src/ctrloralter/checkpoints/sd15-hed-128-only-res"
+#   - Finetuned:
+#       - Style: "models/sd_lora/version_9/checkpoints/epoch_053"
+#       - Style+Depth: "models/sd_lora/version_7/checkpoints/epoch_053"
+#       - Style+HED: "models/sd_lora/version_8/checkpoints/epoch_053"
+# - SDXL: "src/ctrloralter/checkpoints/sdxl_b-lora_256"
+style_ckpt_path="src/ctrloralter/checkpoints/sdxl_b-lora_256"
 struct_ckpt_path="models/sd_lora/version_7/checkpoints/epoch_053"
 
 # Optimization
 opt_strategy="GBO"
-n_starts=20 #20
+n_starts=8 #20
 n_rand_points=800 #8000
 n_best_points=200 #2000
 sample_distribution="train_data" # "train_data", "uniform", "normal"
