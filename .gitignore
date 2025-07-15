@@ -6,9 +6,11 @@ data/ffhq/sd_latents/
 data/ffhq/ffhq-dataset-v2.json
 data/ffhq/sd_latents.pt
 data/ffhq/eval/batch_1024.pt
+data/ffhq/inception_stats/
 
 # Demo
 demo/losses/
+demo/vis/
 
 # Models
 /models/**

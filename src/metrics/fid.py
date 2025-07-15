@@ -118,6 +118,38 @@ class FIDScore:
                 FIDScore.f_cached_stats_real.format(self.img_size)
             )
             self.is_fitted = True
+
+    def load_real_stats(self, stats_file):
+        """
+        Load the real statistics from a file.
+        Args:
+            stats_file (str): The path to the file containing the real statistics.
+        """
+        if os.path.isfile(stats_file):
+            print(f"Loading real stats from: {stats_file}")
+            self.mu_real, self.sigma_real = torch.load(
+                stats_file,
+                map_location=self.device,
+                weights_only=False
+            )
+            self.is_fitted = True
+        else:
+            raise FileNotFoundError(f"Real stats file not found: {stats_file}")
+        
+    def save_real_stats(self, stats_file):
+        """
+        Save the real statistics to a file.
+        Args:
+            stats_file (str): The path to the file where the real statistics will be saved.
+        """
+        if self.is_fitted:
+            print(f"Saving real stats to: {stats_file}")
+            torch.save(
+                (self.mu_real, self.sigma_real),
+                stats_file
+            )
+        else:
+            raise RuntimeError("Real stats not computed yet. Call fit_real() first.")
         
     ############################################################
     def compute_score_from_data(self, data_fake, eps=1E-6):

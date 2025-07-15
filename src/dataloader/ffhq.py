@@ -90,7 +90,7 @@ class FFHQDataset(pl.LightningDataModule):
         dataset = []
         for key in sorted(attr_dict.keys()):
             filename = key.split('.')[0]
-            if attr_dict[key] <= self.max_property_value and attr_dict[key] >= self.min_property_value:
+            if attr_dict[key] >= self.min_property_value and attr_dict[key] < self.max_property_value:
                 dataset.append([filename, attr_dict[key]])
         
         # Convert dataset to numpy array
