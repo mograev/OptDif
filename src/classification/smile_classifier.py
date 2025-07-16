@@ -6,14 +6,13 @@ import json
 
 import torch
 import numpy as np
+import torchvision.transforms as transforms
 
 from src.classification.resnet50 import resnet50
 from src.classification.temperature_scaling import ModelWithTemperature
 
 SMILE_ATTR_IDX_NEW = 3
 SMILE_ATTR_IDX_OLD = 32
-
-INPUT_SIZE = 224 # ResNet50 input size
 
 
 class SmileClassifier:
@@ -49,82 +48,11 @@ class SmileClassifier:
         self.smile_classes = self.attr_data["attr_info"][f"{SMILE_ATTR_IDX_OLD}"]["value"]
         self.smile_classes = np.array(self.smile_classes)
 
-
-    def classify_from_path(self, tensor_paths, batch_size=128, return_prob=False):
-        """
-        Classify a single image or a batch of images from file paths.
-        Args:
-            tensor_paths (str or list): Path(s) to the image tensor(s).
-            batch_size (int): Batch size for processing.
-            return_prob (bool): If True, return probabilities instead of smile scores.
-        Returns:
-            np.ndarray: Smile scores or probabilities for the input images.
-        """
-        # Ensure image_paths is a list
-        if isinstance(tensor_paths, str):
-            tensor_paths = [tensor_paths]
-
-        # Process images in batches if necessary
-        all_outputs = []
-        for i in range(0, len(tensor_paths), batch_size):
-            # Get the current batch
-            batch = tensor_paths[i : i + batch_size]
-
-            # Load and preprocess image tensors
-            input_tensors = []
-            for tensor_path in batch:
-                # Load image tensor
-                img = torch.load(tensor_path)
-                # Add to list
-                input_tensors.append(img)
-            # Stack tensors into a single tensor
-            input_tensors = torch.stack(input_tensors, dim=0)
-
-            # Ensure input tensors are in the correct format
-            if input_tensors.dim() == 3:
-                input_tensors = input_tensors.unsqueeze(0)
-            elif input_tensors.dim() != 4:
-                raise ValueError(f"Input tensor must be 3D or 4D, got {input_tensors.dim()}D")
-
-            # Ensure input tensors have the correct image size
-            input_tensors = torch.nn.functional.interpolate(input_tensors, size=(224, 224), mode="bilinear", align_corners=False, antialias=True)
-
-            # Move tensors to the appropriate device
-            input_tensors = input_tensors.to(self.device)
-
-            # Run classification
-            with torch.no_grad():
-                output = self.model(input_tensors)
-
-            # Ensure output is a tensor
-            if isinstance(output, list):
-                output = torch.stack(output, dim=0)
-
-            # Convert output to probabilities using softmax
-            probabilities = torch.nn.functional.softmax(output, dim=2).cpu().numpy()
-
-            # Compute probability weighted smile score
-            smile_scores = probabilities[SMILE_ATTR_IDX_NEW] @ self.smile_classes
-
-            if return_prob:
-                # Store probabilities and smile scores
-                all_outputs.extend(probabilities[SMILE_ATTR_IDX_NEW].tolist())
-            else:
-                # Store only smile scores
-                all_outputs.extend(smile_scores.tolist())
-
-        # Convert to numpy array
-        all_outputs = np.array(all_outputs)
-
-        # Return a single value for single input or an array otherwise
-        return all_outputs[0] if len(tensor_paths) == 1 else all_outputs
-
-
     def classify(self, images, batch_size=128, return_prob=False):
         """
         Classify a single image or a batch of images from tensors.
         Args:
-            images (torch.Tensor or np.ndarray): Image(s) to classify.
+            images (torch.Tensor): Image(s) to classify.
             batch_size (int): Batch size for processing.
             return_prob (bool): If True, return probabilities instead of smile scores.
         Returns:
@@ -143,13 +71,16 @@ class SmileClassifier:
         for start_idx in range(0, len(images), batch_size):
             batch = images[start_idx : start_idx + batch_size]
             # Resize as needed
-            resized = torch.nn.functional.interpolate(
+            batch = torch.nn.functional.interpolate(
                 batch, size=(224, 224), mode="bilinear", align_corners=False, antialias=True
             ).to(self.device)
 
+            # Normalize the images
+            batch = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])(batch)
+
             # Forward pass
             with torch.no_grad():
-                preds = self.model(resized)
+                preds = self.model(batch)
 
             # Process outputs
             if isinstance(preds, list):

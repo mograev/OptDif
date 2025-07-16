@@ -231,16 +231,11 @@ def _decode_and_predict(sd_vae, predictor, z, device):
     sd_vae = sd_vae.cpu()
     torch.cuda.empty_cache()
 
-    # Concatenate all points and convert to numpy
-    z_decode = torch.cat(z_decode, dim=0).to(device)
-
-    # Normalize decoded points
-    img_mean = torch.Tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1).to(device)
-    img_std = torch.Tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1).to(device)
-    z_decode_normalized = (z_decode - img_mean) / img_std
+    # Concatenate all points and convert to range [0, 1]
+    z_decode = (torch.cat(z_decode, dim=0).to(device) + 1) / 2
 
     # Calculate objective function values and choose which points to keep
-    predictions = predictor(z_decode_normalized, batch_size=1000)
+    predictions = predictor(z_decode, batch_size=1000)
 
     return z_decode.cpu(), predictions
 

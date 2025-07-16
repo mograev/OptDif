@@ -139,10 +139,6 @@ def _choose_best_rand_points(args, dataset):
     assert len(chosen_point_set) == (args.n_rand_points + args.n_best_points)
     chosen_points = sorted(list(chosen_point_set))
 
-    # TEMPORARY TEST: double num of points per iteration
-    # args.n_rand_points += 800
-    # args.n_best_points += 200
-
     return chosen_points
 
 
@@ -178,7 +174,6 @@ def _decode_and_predict(sd_model, predictor, z, device, x_orig=None, cfg_mask=No
 
             # Normalize and downsample images
             img_tensors = img_tensors.float() / 255.0
-            img_tensors = (img_tensors - 0.5) / 0.5  # Normalize to [-1, 1]
             img_tensors = torch.nn.functional.interpolate(img_tensors, size=(sd_model.img_size, sd_model.img_size), mode='bilinear', align_corners=False)
 
             z_decode.append(img_tensors)

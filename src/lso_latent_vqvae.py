@@ -258,17 +258,12 @@ def _decode_and_predict(latent_model, sd_vae, predictor, z, opt_strategy, device
     sd_vae = sd_vae.cpu()
     torch.cuda.empty_cache()
 
-    # Concatenate all points and convert to numpy
-    decoded_images = torch.cat(decoded_images, dim=0).to(device)
+    # Concatenate all points and convert to range [0, 1]
+    decoded_images = (torch.cat(decoded_images, dim=0).to(device) + 1) / 2
     sd_latents = torch.cat(sd_latents, dim=0)
 
-    # Normalize decoded points
-    img_mean = torch.Tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1).to(device)
-    img_std = torch.Tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1).to(device)
-    decoded_images_normalized = (decoded_images - img_mean) / img_std
-
     # Calculate objective function values and choose which points to keep
-    predictions = predictor(decoded_images_normalized, batch_size=1000)
+    predictions = predictor(decoded_images, batch_size=1000)
 
     return decoded_images.cpu(), predictions, sd_latents
 
