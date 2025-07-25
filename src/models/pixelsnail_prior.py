@@ -248,11 +248,13 @@ class HierarchicalPixelSnailPrior(pl.LightningModule):
         )
         # bottom gets spatial conditioning from decoded top (channel = embed_dim)
         cond_chan = n_chan  # project top codebook to this below
+        ratio = (Hb * Wb) / (Ht * Wt)       # e.g. 4096 / 256 = 16
+        scale = ratio ** 0.5
         self.bot_prior = PixelSNAIL2D(
             vocab_size=self.top_vocab + self.bot_vocab,
             shape=(Hb, Wb),
-            n_chan=n_chan,
-            n_blocks=n_blocks,
+            n_chan=int(n_chan * scale),
+            n_blocks=int(n_blocks * scale / 2),
             n_heads=n_heads,
             dropout=dropout,
             cond_chan=cond_chan,

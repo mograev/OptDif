@@ -3,7 +3,7 @@
 #SBATCH --job-name=train_vqvae2           # Job name
 #SBATCH --output=logs/vqvae2/v0_%j.out    # Output log file
 #SBATCH --error=logs/vqvae2/v0_%j.err     # Error log file
-#SBATCH --time=1-00:00:00                 # Maximum runtime (d-hh:mm:ss)
+#SBATCH --time=2-00:00:00                 # Maximum runtime (d-hh:mm:ss)
 #SBATCH --partition=gpu20                 # Partition to submit the job to
 #SBATCH --gres=gpu:4                      # Request GPU resources
 
@@ -17,7 +17,7 @@ num_workers=8
 val_split=0.1
 
 # Model & Training
-model_version="0_2"
+model_version="0_3"
 model_config_path="models/vqvae2/configs/img_to_2k_lpips_disc.yaml"
 model_output_dir="models/vqvae2/"
 max_epochs=200

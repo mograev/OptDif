@@ -137,7 +137,17 @@ class LatentModel(pl.LightningModule, ABC):
         pass
 
     def get_input(self, batch):
-        """Get the input tensor from the batch and ensure its correct dtype."""
+        """
+        Get the input tensor from the batch and ensure its correct dtype.
+        Optionally encodes it to sd latents if necessary.
+        Args:
+            batch (torch.Tensor): Input batch tensor.
+        Returns:
+            torch.Tensor: Input tensor of shape (B, C, H, W).
+        """
+        # Encode to sd latents if not already in that space
+        if batch.shape[-1] not in (8, 32): # Expecting 8x8 or 32x32 sd latents
+            batch = self.images_to_latents(batch)
         return batch.to(memory_format=torch.contiguous_format).float()
 
     @torch.no_grad()
@@ -162,6 +172,25 @@ class LatentModel(pl.LightningModule, ABC):
 
         return images
 
+    @torch.no_grad()
+    def images_to_latents(self, images):
+        """
+        Encode pixel-space images to Stable-Diffusion latents.
+        Args:
+            images (torch.Tensor): Image tensor of shape (B, C, H, W).
+        Returns:
+            torch.Tensor: Latent tensor of shape (B, C, H, W).
+        Raises:
+            RuntimeError: If sd_vae is not initialized.
+        """
+        if self.sd_vae is None:
+            raise RuntimeError("images_to_latents() called but sd_vae is not initialized.")
+        # Move encoder to correct device if necessary
+        self.sd_vae.to(images.device)
+        latents = self.sd_vae.encode(images).latent_dist.sample()
+
+        return latents
+
     def configure_optimizers(self):
         """Configures the optimizer for the model."""
         return torch.optim.Adam(self.parameters(), lr=self.learning_rate)
@@ -184,6 +213,8 @@ class LatentModel(pl.LightningModule, ABC):
             latents = val_batch[0] if isinstance(val_batch, (list, tuple)) else val_batch
             # Preserve batch dimension (B,C,H,W) and move to the right device
             self.fixed_latents = latents[:16].to(self.device)
+            # Encode to sd latents if necessary
+            self.fixed_latents = self.get_input(self.fixed_latents)
 
     @torch.no_grad()
     def _log_reconstructions(self):
@@ -343,6 +374,9 @@ class LatentVAE(LatentModel):
         Returns:
             DiagonalGaussianDistribution: Posterior distribution of the latent space.
         """
+        # Encode to sd latents if not already in that space
+        x = self.get_input(x)
+
         h = self.encoder(x)
         moments = self.quant_conv(h)
         posterior = DiagonalGaussianDistribution(moments)
@@ -706,6 +740,9 @@ class LatentVQVAE(LatentModel):
         Returns:
             tuple: Quantized tensor, embedding loss, and indices.
         """
+        # Encode to sd latents if not already in that space
+        x = self.get_input(x)
+        
         h = self.encoder(x)
         h = self.quant_conv(h)
         quant, emb_loss, (_,_,ind) = self.quantize(h)
@@ -1054,6 +1091,9 @@ class LatentVQVAE2(LatentModel):
             tuple: Quantized bottom code, quantized top code, total embedding loss,
                    and concatenated indices for both codes.
         """
+        # Encode to sd latents if not already in that space
+        x = self.get_input(x)
+
         # Bottom-level features
         h_b = self.encoder_bottom(x)                # (B, C_b, H_b, W_b)
 
@@ -1275,7 +1315,7 @@ class LatentVQVAE2(LatentModel):
             return torch.optim.Adam(self.parameters(), lr=self.learning_rate)
 
 
-class LatentAutoencoder(LatentModel):
+class LatentAE(LatentModel):
     def __init__(
             self,
             ddconfig,
@@ -1288,7 +1328,7 @@ class LatentAutoencoder(LatentModel):
             spectral_instance=None,
         ):
         """
-        LatentAutoencoder to process latents instead of images.
+        LatentAE to process latents instead of images.
         Args:
             ddconfig: Configuration for the encoder and decoder.
             lossconfig: Configuration for the loss function.
@@ -1350,6 +1390,9 @@ class LatentAutoencoder(LatentModel):
         Returns:
             torch.Tensor: Encoded tensor of shape (B, embed_dim).
         """
+        # Encode to sd latents if not already in that space
+        x = self.get_input(x)
+        
         h = self.encoder(x)
         z = self.quant_conv(h)
         return z
@@ -1515,7 +1558,7 @@ class LatentAutoencoder(LatentModel):
 
         # -- 3. Logging ------------------------------------------- #
         self.log_dict(log_dict, prog_bar=False, on_step=False, on_epoch=True, sync_dist=True)
-        self.log("val/total_loss", total_loss, prog_bar=True, on_step=False, on_epoch=True)
+        self.log("val/total_loss", total_loss, prog_bar=True, on_step=False, on_epoch=True, sync_dist=True)
         return total_loss
 
     def configure_optimizers(self):
@@ -1614,6 +1657,9 @@ class LatentLinearAE(LatentModel):
         Returns:
             torch.Tensor: Encoded tensor of shape (B, latent_dim).
         """
+        # Encode to sd latents if not already in that space
+        x = self.get_input(x)
+        
         return self.encoder(self._flatten(x))
 
     def decode(self, z):

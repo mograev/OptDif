@@ -11,6 +11,7 @@ import pytorch_lightning as pl
 from torch.optim.lr_scheduler import LambdaLR
 
 from src.models.latent_models import LatentVQVAE2
+from src.models.vqvae2 import VQVAE2
 
 
 class ARTransformer(nn.Module):
@@ -25,6 +26,7 @@ class ARTransformer(nn.Module):
         n_layers=8,
         n_heads=8,
         dropout=0.0,
+        include_bos: bool = False,
     ):
         """
         Initialize the Transformer with the given parameters.
@@ -35,8 +37,16 @@ class ARTransformer(nn.Module):
             n_layers: Number of TransformerEncoder layers.
             n_heads: Attention heads in each layer.
             dropout: Dropout rate for the Transformer layers.
+            include_bos: Whether to include an explicit BOS token.
         """
         super().__init__()
+        # Optional explicit beginning‑of‑sequence (BOS) token
+        self.include_bos = include_bos
+        if include_bos:
+            self.bos_idx = vocab_size          # reserve last index for BOS
+            vocab_size += 1                    # expand vocabulary
+        else:
+            self.bos_idx = None
         self.seq_len = seq_len
         self.tok_emb = nn.Embedding(vocab_size, d_model)
         self.pos_emb = nn.Embedding(seq_len, d_model)
@@ -76,7 +86,7 @@ class ARTransformer(nn.Module):
         return self.head(h)
 
     @torch.no_grad()
-    def generate(self, prefix, temperature=1.0, top_k=None):
+    def generate(self, prefix, temperature=1.0, top_k=None, seed=None):
         """
         Sampling helper for autoregressive generation.
         Autoregressively complete a sequence until `self.seq_len`.
@@ -84,6 +94,7 @@ class ARTransformer(nn.Module):
             prefix: Initial sequence to start generation from (B, <=seq_len).
             temperature: Softmax temperature for sampling.
             top_k: If specified, only sample from the top-k logits.
+            seed: Optional random seed for reproducibility.
         Returns:
             seq: Generated sequence of indices.
         """
@@ -94,13 +105,17 @@ class ARTransformer(nn.Module):
         )
         seq[:, :cur] = prefix
 
+        generator = torch.Generator(device=device)
+        if seed is not None:
+            generator.manual_seed(seed)
+
         for t in range(cur, self.seq_len):
             logits = self(seq[:, : t + 1])[:, -1] / temperature  # (B, vocab)
             if top_k is not None:
                 v, _ = torch.topk(logits, top_k)
                 logits[logits < v[:, [-1]]] = -float("inf")
             probs = torch.softmax(logits, dim=-1)
-            next_tok = torch.multinomial(probs, 1).squeeze(-1)
+            next_tok = torch.multinomial(probs, 1, generator=generator).squeeze(-1)
             seq[:, t] = next_tok
 
         return seq
@@ -188,18 +203,24 @@ class GridTransformer(nn.Module):
         return self.head(h)
 
     @torch.no_grad()
-    def generate(self, prefix: torch.LongTensor, temperature: float = 1.0, top_k: int | None = None):
+    def generate(self, prefix: torch.LongTensor, temperature: float = 1.0, top_k: int | None = None, seed: int | None = None):
         """
         Autoregressive sampling for GridTransformer.
         Args:
             prefix: Initial sequence of token indices, shape (B, cur_len).
             temperature: Softmax temperature.
             top_k: If specified, use top-k sampling.
+            seed: Optional random seed for reproducibility.
         Returns:
             seq: Generated full sequence of shape (B, self.seq_len).
         """
         B, cur = prefix.shape
         device = prefix.device
+
+        generator = torch.Generator(device=device)
+        if seed is not None:
+            generator.manual_seed(seed)
+
         # Initialize sequence with zeros
         seq = torch.zeros((B, self.seq_len), dtype=torch.long, device=device)
         seq[:, :cur] = prefix
@@ -210,23 +231,24 @@ class GridTransformer(nn.Module):
                 v, _ = torch.topk(logits, top_k)
                 logits[logits < v[:, [-1]]] = -float("inf")
             probs = torch.softmax(logits, dim=-1)
-            next_tok = torch.multinomial(probs, 1).squeeze(-1)
+            next_tok = torch.multinomial(probs, 1, generator=generator).squeeze(-1)
             seq[:, t] = next_tok
         return seq
 
 
 class HierarchicalTransformerPrior(pl.LightningModule):
     """
-    Two-stage Transformer prior (top-level + bottom-level) for LatentVQVAE-2.
+    Two-stage Transformer prior (top-level + bottom-level) for LatentVQVAE-2 or VQVAE-2.
     """
     def __init__(
         self,
-        vqvae : LatentVQVAE2,
+        vqvae : LatentVQVAE2 | VQVAE2,
         d_model=512,
         n_layers=8,
         n_heads=8,
         lr=3e-4,
         weight_decay=0.0,
+        freeze_bottom_steps=5_000,
     ):
         """
         Initialize the Hierarchical Transformer prior.
@@ -256,36 +278,39 @@ class HierarchicalTransformerPrior(pl.LightningModule):
 
         self.top_len = top_res * top_res
         self.bot_len = bot_res * bot_res
-        self.seq_len_bot = self.top_len + self.bot_len
+        self.seq_len_bot = self.top_len + self.bot_len + 1  # +1 for BOS
 
-        # Setup AR Transformers
-        # Top-level Transformer over top-level codes (fixed length)
-        # self.top_prior = ARTransformer(
-        #     vocab_size=self.top_vocab,
-        #     seq_len=self.top_len,
-        #     d_model=d_model,
-        #     n_layers=n_layers,
-        #     n_heads=n_heads,
-        # )
-        self.top_prior = GridTransformer(
+        # When we use a GridTransformer for the bottom prior the sequence length
+        # must be a perfect H×W grid.  We embed the BOS + all top‑level tokens
+        # as a *prefix* that occupies a few extra rows at the top of the grid.
+        self.extra_rows = math.ceil((self.top_len + 1) / bot_res)  # rows needed for prefix
+        self.height_bot = bot_res + self.extra_rows                # total grid height
+        # full sequence length seen by the bottom prior
+        self.seq_len_bot_grid = self.height_bot * bot_res
+
+        # ── Transformer priors with explicit BOS tokens ─────────────────── #
+        self.top_prior = ARTransformer(
             vocab_size=self.top_vocab,
-            height=top_res,
-            width=top_res,
+            seq_len=self.top_len + 1,        # +1 to accommodate BOS
             d_model=d_model,
             n_layers=n_layers,
             n_heads=n_heads,
+            include_bos=True,
         )
 
-        # Bottom-level Transformer over full sequence (top + bottom codes)
-        self.bot_prior = ARTransformer(
+        # Bottom‑level prior: 2‑D GridTransformer that still sees the prefix tokens.
+        self.bot_prior = GridTransformer(
             vocab_size=self.top_vocab + self.bot_vocab,
-            seq_len=self.seq_len_bot,
-            d_model=d_model,
-            n_layers=n_layers,
-            n_heads=n_heads,
+            height=self.height_bot,
+            width=bot_res,
+            d_model=int(d_model*1.5),
+            n_layers=n_layers+4,
+            n_heads=n_heads*2//3,
+            dropout=0.0,
         )
 
         self.lr = lr
+        self.freeze_bottom_steps = freeze_bottom_steps
         self.weight_decay = weight_decay
 
     @torch.no_grad()
@@ -318,7 +343,7 @@ class HierarchicalTransformerPrior(pl.LightningModule):
         Args:
             x: Input tensor (B, C, H, W) in pixel space.
         Returns:
-            loss: Computed loss value.Wh
+            loss: Computed loss value.
         """
         top_idx, bot_idx = self.encode_to_indices(x)
 
@@ -331,12 +356,24 @@ class HierarchicalTransformerPrior(pl.LightningModule):
         dead_frac = (flat == 0).float().mean()
 
         # log to TensorBoard
-        self.log("dist/top_dead_frac", dead_frac, prog_bar=False)
+        self.log("dist/top_dead_frac", dead_frac, prog_bar=False, sync_dist=True)
         self.logger.experiment.add_histogram("dist/top_code_freqs", freqs.cpu(), self.global_step)
 
+        # do the same for bottom indices
+        flat_bot = bot_idx.flatten()
+        counts_bot = torch.bincount(flat_bot, minlength=self.bot_vocab).float()
+        freqs_bot = counts_bot / counts_bot.sum()
+        dead_frac_bot = (flat_bot == 0).float().mean()
+        self.log("dist/bot_dead_frac", dead_frac_bot, prog_bar=False, sync_dist=True)
+        self.logger.experiment.add_histogram("dist/bot_code_freqs", freqs_bot.cpu(), self.global_step)
+
         # -- Top loss --------------------------------------------- #
-        inp_top = top_idx[:, :-1]  # teacher-forced input (B, top_len-1)
-        tgt_top = top_idx[:, 1:]  # target (B, top_len-1)
+        bos_tok = torch.full((top_idx.size(0), 1),
+                             self.top_prior.bos_idx,
+                             dtype=torch.long,
+                             device=top_idx.device)
+        inp_top = torch.cat([bos_tok, top_idx[:, :-1]], dim=1)  # (B, top_len)
+        tgt_top = top_idx                                        # (B, top_len)
         logits_top = self.top_prior(inp_top)
         loss_top = F.cross_entropy(
             logits_top.reshape(-1, logits_top.size(-1)),
@@ -345,16 +382,26 @@ class HierarchicalTransformerPrior(pl.LightningModule):
 
         # -- Bottom loss ------------------------------------------ #
         bot_idx_off = bot_idx + self.bottom_offset
-        full_seq = torch.cat([top_idx, bot_idx_off], dim=1)  # (B, seq_len_bot)
+        bos_bot = torch.full((bot_idx_off.size(0), 1),
+                             0,  # will be BOS row in the grid (token 0)
+                             dtype=torch.long,
+                             device=bot_idx_off.device)
+        full_seq = torch.cat([bos_bot, top_idx, bot_idx_off], dim=1)         # (B, top_len+1+bot_len)
+        # Pad so it fits the H×W grid expected by GridTransformer
+        pad_len = self.seq_len_bot_grid - full_seq.size(1)
+        if pad_len > 0:
+            full_seq = F.pad(full_seq, (0, pad_len), value=0)               # pad with dummy token 0
 
         inp_bot = full_seq[:, :-1]
         tgt_bot = full_seq[:, 1:]
 
         logits_bot = self.bot_prior(inp_bot)  # (B, L-1, V_tot)
 
-        # ignore the first top_len targets that belong to the prefix
-        mask = torch.ones_like(tgt_bot, dtype=torch.bool)
-        mask[:, : self.top_len - 1] = False
+        # valid targets = bottom tokens only (ignore prefix + padding)
+        mask = torch.zeros_like(tgt_bot, dtype=torch.bool)
+        start_bot = self.top_len                                  # skip BOS + top codes
+        end_bot   = start_bot + self.bot_len
+        mask[:, start_bot:end_bot] = True
 
         loss_bot = F.cross_entropy(
             logits_bot.reshape(-1, logits_bot.size(-1)),
@@ -364,16 +411,27 @@ class HierarchicalTransformerPrior(pl.LightningModule):
         loss_bot = (loss_bot * mask.reshape(-1)).sum() / mask.sum()
 
         # -- Total loss ------------------------------------------- #
-        loss = loss_top + loss_bot
+        loss = loss_top + 4 * loss_bot
         return loss, {"total_loss": loss, "loss_top": loss_top, "loss_bottom": loss_bot}
 
     # Lightning API
     def training_step(self, batch, _):
         loss, logs = self(batch)
         logs = {f"train/{k}": v for k, v in logs.items()}
+        logs["train/bottom_frozen"] = float(self.global_step < self.freeze_bottom_steps)
         self.log_dict(logs, on_step=True, on_epoch=False, sync_dist=True)
         return loss
+    
+    def on_train_start(self) -> None:
+        # Freeze bottom prior parameters until the scheduled number of steps has passed
+        for p in self.bot_prior.parameters():
+            p.requires_grad_(False)
 
+    def on_train_batch_start(self, batch, batch_idx, dataloader_idx: int = 0) -> None:
+        # Un‑freeze once the scheduled number of steps has passed
+        if self.global_step == self.freeze_bottom_steps:
+            for p in self.bot_prior.parameters():
+                p.requires_grad_(True)
 
     def validation_step(self, batch, _):
         loss, logs = self(batch)
@@ -420,28 +478,42 @@ class HierarchicalTransformerPrior(pl.LightningModule):
         return [optimizer], [scheduler]
 
     @torch.no_grad()
-    def sample(self, n, temperature=1.0, top_k=None):
+    def sample(self, n, temperature=1.0, top_k=None, seed=None):
         """
         Generate `n` images (decoded to pixel/latent space of VQ-VAE).
         Args:
             n: Number of samples to generate.
             temperature: Softmax temperature for sampling.
             top_k: If specified, only sample from the top-k logits.
+            seed: Optional random seed for reproducibility.
         Returns:
             imgs: Generated images (B, C, H, W) in pixel space.
+        Note: bottom-level codes are sampled on a grid, with BOS+top codes as a prefix occupying extra rows.
         """
         device = next(self.parameters()).device
         # -- 1) sample top codes ---------------------------------- #
-        prefix_top = torch.zeros((n, 1), dtype=torch.long, device=device)
-        top_seq = self.top_prior.generate(prefix_top, temperature, top_k)  # (n, top_len)
+        bos_top = torch.full((n, 1),
+                             self.top_prior.bos_idx,
+                             dtype=torch.long,
+                             device=device)
+        top_seq_full = self.top_prior.generate(bos_top, temperature, top_k, seed)  # (n, top_len+1)
+        top_seq = top_seq_full[:, 1:]  # drop BOS
         # Clamp to handle out-of-range tokens
         top_seq = top_seq.clamp(0, self.top_vocab - 1)
 
         # -- 2) sample bottom codes ------------------------------- #
-        # start with full prefix = top_seq
-        bot_prefix = top_seq
-        full_seq = self.bot_prior.generate(bot_prefix, temperature, top_k)  # (n, seq_len_bot)
-        bot_seq_off = full_seq[:, self.top_len :]  # bottom (offset still applied)
+        bos_bot = torch.full((n, 1),
+                             0,  # will be BOS row in the grid
+                             dtype=torch.long,
+                             device=device)
+        bot_prefix = torch.cat([bos_bot, top_seq], dim=1)
+
+        # pad prefix to grid length
+        pad_len = self.seq_len_bot_grid - bot_prefix.size(1)
+        bot_prefix = F.pad(bot_prefix, (0, pad_len), value=0)
+
+        full_seq = self.bot_prior.generate(bot_prefix, temperature, top_k, seed)  # (n, seq_len_bot_grid)
+        bot_seq_off = full_seq[:, self.top_len + 1 : self.top_len + 1 + self.bot_len]
 
         # Valid bottom tokens are in [bottom_offset, bottom_offset + bot_vocab ‑ 1]
         bot_seq_off = bot_seq_off.clamp(self.bottom_offset, self.bottom_offset + self.bot_vocab - 1)

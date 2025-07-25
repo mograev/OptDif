@@ -218,10 +218,10 @@ class VQVAE2(pl.LightningModule):
             code_t = code_t.unsqueeze(0)
 
         q_b = self.quantize_bottom.get_codebook_entry(
-            code_b, shape=(code_b.shape[0], *self.encoder_bottom.output_shape)
+            code_b, shape=(code_b.shape[0], *self.latent_dim_bottom)
         )
         q_t = self.quantize_top.get_codebook_entry(
-            code_t, shape=(code_t.shape[0], *self.encoder_top.output_shape)
+            code_t, shape=(code_t.shape[0], *self.latent_dim_top)
         )
         return self.decode(q_b, q_t)
 

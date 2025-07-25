@@ -12,6 +12,7 @@ from src.metrics.fid import FIDScore
 from src.models.transformer_prior import HierarchicalTransformerPrior
 from src.models.pixelsnail_prior import HierarchicalPixelSnailPrior
 from src.models.latent_models import LatentVQVAE2
+from src.models.vqvae2 import VQVAE2
 
 from diffusers import AutoencoderKL
 
@@ -70,8 +71,7 @@ if __name__ == "__main__":
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
         ]),
-        encoder=sd_vae
-    ).set_encode(True)
+    ).set_encode(False)
 
     # -- Initialize FID metric ------------------------------------ #
 
@@ -105,6 +105,14 @@ if __name__ == "__main__":
         fid_instance=fid_instance,
         spectral_instance=None,
     )
+    # latent_model = VQVAE2(
+    #     ddconfig=config["ddconfig"],
+    #     lossconfig=config["lossconfig"],
+    #     learning_rate=0.0,
+    #     fid_instance=fid_instance,
+    #     spectral_instance=None,
+    # )
+
     state = torch.load(args.latent_model_ckpt_path, map_location="cpu")["state_dict"]
     latent_model.load_state_dict(state, strict=True)
     latent_model.eval()

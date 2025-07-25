@@ -1,11 +1,13 @@
 #!/bin/bash
 
 #SBATCH --job-name=train_latent_prior             # Job name
-#SBATCH --output=logs/latent_prior/v8_%j.out      # Std‑out log
-#SBATCH --error=logs/latent_prior/v8_%j.err       # Std‑err log
-#SBATCH --time=2-00:00:00                         # Max runtime (d‑hh:mm:ss)
-#SBATCH --partition=gpu20                         # SLURM partition
-#SBATCH --gres=gpu:4                              # 4 GPUs
+#SBATCH --output=logs/latent_prior/v16_%j.out     # Std‑out log
+#SBATCH --error=logs/latent_prior/v16_%j.err      # Std‑err log
+#SBATCH --time=1-00:00:00                         # Max runtime (d‑hh:mm:ss)
+#SBATCH --cpus-per-task=28
+#SBATCH --mem 128G
+#SBATCH --partition=gpu24                         # SLURM partition
+#SBATCH --gres=gpu:h100:4                         # 4 GPUs
 
 # Dataloader
 img_dir="data/ffhq/images1024x1024"
@@ -20,10 +22,14 @@ val_split=0.1
 latent_model_config_path="models/latent_vqvae2/version_1_2/hparams.yaml"
 latent_model_ckpt_path="models/latent_vqvae2/version_1_2/checkpoints/last.ckpt"
 
+# VQ-VAE-2
+# latent_model_config_path="models/vqvae2/version_0_3/hparams.yaml"
+# latent_model_ckpt_path="models/vqvae2/version_0_3/checkpoints/last.ckpt"
+
 # Prior setup (shared hyperparameters)
 prior_type="transformer" # "transformer" or "pixelsnail"
 prior_out_dir="models/latent_prior/"
-prior_version=8
+prior_version="16"
 n_heads=12
 lr=2e-4
 weight_decay=5e-3
@@ -46,7 +52,7 @@ eval "$(conda shell.bash hook)"
 # Activate the conda environment
 conda activate optdif1
 
-python src/run/train_latent_prior.py \
+CUDA_LAUNCH_BLOCKING=1 python src/run/train_latent_prior.py \
     --img_dir $img_dir \
     --attr_path $attr_path \
     --max_property_value $max_property_value \
