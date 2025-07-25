@@ -9,7 +9,7 @@ ddconfig:
     num_res_blocks: 2
     attn_resolutions: []
     dropout: 0.0
-    attn_type: "vanilla"
+    attn_type: vanilla
     embed_dim: 512
 lossconfig:
     target: "src.models.modules.losses.AutoencoderLPIPSWithDiscriminator"

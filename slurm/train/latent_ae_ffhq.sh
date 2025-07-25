@@ -1,11 +1,11 @@
 #!/bin/bash
 
-#SBATCH --job-name=train_latent_autoencoder         # Job name
-#SBATCH --output=logs/latent_autoencoder/v1_%j.out  # Output log file
-#SBATCH --error=logs/latent_autoencoder/v1_%j.err   # Error log file
-#SBATCH --time=12:00:00                             # Maximum runtime (hh:mm:ss)
-#SBATCH --partition=gpu20.                          # Partition to submit the job to
-#SBATCH --gres=gpu:4                                # Request GPU resources
+#SBATCH --job-name=train_latent_ae         # Job name
+#SBATCH --output=logs/latent_ae/v1_%j.out  # Output log file
+#SBATCH --error=logs/latent_ae/v1_%j.err   # Error log file
+#SBATCH --time=2-00:00:00                  # Maximum runtime (hh:mm:ss)
+#SBATCH --partition=gpu20                  # Partition to submit the job to
+#SBATCH --gres=gpu:4                       # Request GPU resources
 
 # Dataloader
 img_dir="data/ffhq/images1024x1024"
@@ -17,10 +17,10 @@ num_workers=8
 val_split=0.1
 
 # Model & Training
-model_type="LatentAutoencoder"
+model_type="LatentAE"
 model_version=1
-model_config_path="models/latent_autoencoder/configs/sd35m_to_512d_lpips_disc.yaml"
-model_output_dir="models/latent_autoencoder/"
+model_config_path="models/latent_ae/configs/sd35m_to_512d_lpips_disc.yaml"
+model_output_dir="models/latent_ae/"
 max_epochs=100
 
 # Initialize Conda for the current shell

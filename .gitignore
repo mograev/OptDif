@@ -15,8 +15,9 @@ demo/vis/
 # Models
 /models/**
 # keep any configs
-!/models/**/configs/ 
-!/models/**/configs/**
+!/models/*/
+!/models/*/configs/
+!/models/*/configs/**
 taming/
 ControlNetHED.pth
 

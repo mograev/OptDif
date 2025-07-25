@@ -7,12 +7,10 @@ import pytorch_lightning as pl
 from torchvision import transforms
 
 from src.dataloader.ffhq import FFHQDataset
-from src.models.latent_models import LatentVAE, LatentVQVAE, LatentVQVAE2, LatentAutoencoder, LatentLinearAE
+from src.models.latent_models import LatentVAE, LatentVQVAE, LatentVQVAE2, LatentAE, LatentLinearAE
 from src.metrics.fid import FIDScore
 from src.metrics.spectral import SpectralScore
 from src.dataloader.utils import OptEncodeDataset
-
-from diffusers import AutoencoderKL
 
 # Set the multiprocessing start method to spawn
 import torch.multiprocessing as mp
@@ -31,7 +29,7 @@ if __name__ == "__main__":
     parser = FFHQDataset.add_data_args(parser)
 
     # Direct arguments
-    parser.add_argument("--model_type", type=str, choices=["LatentVAE", "LatentVQVAE", "LatentVQVAE2", "LatentAutoencoder", "LatentLinearAE"], help="Type of latent model to use")
+    parser.add_argument("--model_type", type=str, choices=["LatentVAE", "LatentVQVAE", "LatentVQVAE2", "LatentAE", "LatentLinearAE"], help="Type of latent model to use")
     parser.add_argument("--model_version", type=str, help="Version of the latent model to use")
     parser.add_argument("--model_config_path", type=str, help="Path to the model config file")
     parser.add_argument("--model_output_dir", type=str, help="Directory to save the model")
@@ -45,10 +43,6 @@ if __name__ == "__main__":
 
     # -- Load Data module ----------------------------------------- #
 
-    # Load SD-VAE model
-    sd_vae = AutoencoderKL.from_pretrained("stabilityai/stable-diffusion-3.5-medium", subfolder="vae")
-    sd_vae.eval()
-
     # Load data
     datamodule = FFHQDataset(
         args,
@@ -57,9 +51,8 @@ if __name__ == "__main__":
             transforms.RandomResizedCrop(size=256, scale=(0.9, 1.0)),
             transforms.ToTensor(),
             transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5])
-        ]),
-        encoder=sd_vae
-    ).set_encode(True)
+        ])
+    ).set_encode(False)
 
     # -- Initialize FID and Spectral metric ----------------------- #
 
@@ -94,7 +87,7 @@ if __name__ == "__main__":
         "LatentVAE": LatentVAE,
         "LatentVQVAE": LatentVQVAE,
         "LatentVQVAE2": LatentVQVAE2,
-        "LatentAutoencoder": LatentAutoencoder,
+        "LatentAE": LatentAE,
         "LatentLinearAE": LatentLinearAE,
     }[args.model_type]
 
