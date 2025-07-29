@@ -23,6 +23,7 @@ import numpy as np
 from diffusers import AutoencoderKL
 
 # My imports
+sys.path.append(os.getcwd()) # Ensure the src directory is in the Python path
 from src.dataloader.ffhq import FFHQDataset
 from src.dataloader.utils import OptEncodeDataset
 from src.dataloader.weighting import DataWeighter
@@ -69,7 +70,7 @@ def add_opt_args(parser):
     bo_group = parser.add_argument_group("BO")
     bo_group.add_argument("--n_samples", type=int, default=10000, help="Number of samples to draw from sample distribution")
     bo_group.add_argument("--opt_method", type=str, default="SLSQP", choices=["SLSQP", "COBYLA", "L-BFGS-B", "trust-constr"], help="Optimization method to use: 'SLSQP', 'COBYLA' 'L-BFGS-B'")
-    bo_group.add_argument("--opt_constraint", type=str, default="GMM", help="Strategy for optimization constraint: only 'GMM' is implemented")
+    bo_group.add_argument("--opt_constraint", type=str, choices=["GMM", "None"], help="Strategy for optimization constraint: only 'GMM' is implemented")
     bo_group.add_argument("--n_gmm_components", type=int, default=None, help="Number of components used for GMM fitting")
     bo_group.add_argument("--sparse_out", type=bool, default=True, help="Whether to filter out duplicate outputs")
 
@@ -375,7 +376,7 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
             f"--sparse_out={args.sparse_out}"
         ]
 
-        if args.opt_constraint is not None:
+        if args.opt_constraint != "None":
             bo_opt_command.append(f"--opt_constraint={args.opt_constraint}")
             bo_opt_command.append(f"--n_gmm_components={args.n_gmm_components}")
 
@@ -445,6 +446,16 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
             pbar.set_description("gradient-based optimization")
 
         _run_command(gbo_opt_command, f"GBO opt")
+
+    # Delete data and train results files to save space
+    if os.path.exists(data_file):
+        os.remove(data_file)
+    if args.opt_strategy in ["GP", "DNGO"]:
+        if os.path.exists(curr_bo_file):
+            os.remove(curr_bo_file)
+    elif args.opt_strategy == "GBO":
+        if os.path.exists(curr_gbo_file):
+            os.remove(curr_gbo_file)
 
     # Load point (and init points if available)
     results = np.load(opt_path, allow_pickle=True)
@@ -577,6 +588,10 @@ def main_loop(args):
     ) as pbar:
 
         for ret_idx in range(num_retrain):
+            # Log global time
+            logger.info(f"Retraining iteration {ret_idx + 1}/{num_retrain} at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}")
+            
+            # Update progress bar
             pbar.set_postfix(postfix)
             pbar.set_description("retraining")
 

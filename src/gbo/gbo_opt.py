@@ -7,11 +7,14 @@ import argparse
 import pickle
 import logging
 import time
+import os
+import sys
 
 import numpy as np
 import torch
 from sklearn.decomposition import PCA
 
+sys.path.append(os.getcwd()) # Ensure the src directory is in the Python path
 from src.gbo.gbo_model import GBOModel
 from src.utils import zero_mean_unit_var_normalization, zero_mean_unit_var_denormalization
 

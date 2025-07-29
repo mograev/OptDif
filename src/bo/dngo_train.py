@@ -6,12 +6,15 @@ import logging
 import time
 import pickle
 import argparse
+import os
+import sys
 
 import numpy as np
 import torch
 import pytorch_lightning as pl
 from sklearn.decomposition import PCA
 
+sys.path.append(os.getcwd()) # Ensure the src directory is in the Python path
 from src.metrics.feature_importance import compute_feature_importance_from_data, compute_feature_importance_from_model
 from src.bo.dngo_model import DNGO
 
@@ -25,7 +28,6 @@ dngo_train_group.add_argument("--data_file", type=str, help="file to load data f
 dngo_train_group.add_argument("--save_file", type=str, required=True, help="path to save results to")
 dngo_train_group.add_argument('--normalize_input', dest="normalize_input", action="store_true")
 dngo_train_group.add_argument('--normalize_output', dest="normalize_output", action="store_true")
-dngo_train_group.add_argument('--do_mcmc', dest="do_mcmc", action="store_true")
 dngo_train_group.add_argument('--feature_selection', type=str, default=None, choices=["PCA", "FI"], help="Feature selection method to use: 'PCA' or 'FI'. If None, no feature selection is applied.")
 dngo_train_group.add_argument('--feature_selection_dims', type=int, default=512, help="Number of (PCA or FI) dimensions to use. If feature_selection is None, this is ignored.")
 dngo_train_group.add_argument('--feature_selection_model_path', type=str, default=None, help="Path to the feature selection model file.")
@@ -38,7 +40,6 @@ def dngo_train(
     save_file,
     normalize_input=False,
     normalize_output=False,
-    do_mcmc=False,
     feature_selection=None,
     feature_selection_dims=512,
     feature_selection_model_path=None,
@@ -52,7 +53,6 @@ def dngo_train(
         save_file (str): Path to save the trained model.
         normalize_input (bool): Whether to normalize input data.
         normalize_output (bool): Whether to normalize output data.
-        do_mcmc (bool): Whether to perform MCMC sampling.
         feature_selection (str): Feature selection method to use ('PCA' or 'FI'). If None, no feature selection is applied.
         feature_selection_dims (int): Number of dimensions to use for feature selection. Ignored if feature_selection is None.
         feature_selection_model_path (str): Path to the feature selection model file, if applicable.
@@ -165,4 +165,4 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
     pl.seed_everything(args.seed)
-    dngo_train(args.logfile, args.data_file, args.save_file, args.normalize_input, args.normalize_output, args.do_mcmc, args.feature_selection, args.feature_selection_dims, args.feature_selection_model_path, args.device)
+    dngo_train(args.logfile, args.data_file, args.save_file, args.normalize_input, args.normalize_output, args.feature_selection, args.feature_selection_dims, args.feature_selection_model_path, args.device)

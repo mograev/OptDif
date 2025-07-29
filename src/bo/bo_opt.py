@@ -12,6 +12,7 @@ import pickle
 import time
 import contextlib
 import sys
+import os
 
 import numpy as np
 from scipy.optimize import minimize
@@ -20,6 +21,7 @@ from sklearn.decomposition import PCA
 import torch
 import pytorch_lightning as pl
 
+sys.path.append(os.getcwd()) # Ensure the src directory is in the Python path
 from src.bo.gp_model import SparseGPModel
 from src.utils import sparse_subset
 
@@ -37,7 +39,7 @@ opt_group.add_argument("--n_out", type=int, default=5, help="Number of points to
 opt_group.add_argument("--n_starts", type=int, default=20, help="Number of optimization runs with different initial values")
 opt_group.add_argument("--n_samples", type=int, default=10000, help="Number of samples to draw from sample distribution")
 opt_group.add_argument("--sample_distribution", type=str, default="normal", help="Distribution to sample from: 'normal' or 'uniform'")
-opt_group.add_argument("--opt_constraint", type=str, default="GMM", help="Strategy for optimization constraint: only 'GMM' is implemented")
+opt_group.add_argument("--opt_constraint", type=str, default=None, help="Strategy for optimization constraint: only 'GMM' is implemented")
 opt_group.add_argument("--n_gmm_components", type=int, default=None, help="Number of components used for GMM fitting")
 opt_group.add_argument("--sparse_out", type=bool, default=True, help="Whether to filter out duplicate outputs")
 opt_group.add_argument("--opt_method", type=str, default="SLSQP", choices=["SLSQP", "COBYLA", "L-BFGS-B", "trust-constr"], help="Optimization method to use")
@@ -188,7 +190,7 @@ def robust_multi_restart_optimizer(
     logger=None,
     n_samples=10000,
     sample_distribution="normal",
-    opt_constraint="GMM",
+    opt_constraint=None,
     n_gmm_components=None,
     sparse_out=True,
     feature_selection=None,
@@ -231,10 +233,8 @@ def robust_multi_restart_optimizer(
         latent_grid = np.random.normal(loc=mean, scale=std, size=(n_samples, X_train.shape[1]))
         init_indices = None
     elif sample_distribution == "train_data":
-        init_indices = np.random.choice(X_train.shape[0], size=n_samples, replace=True)
+        init_indices = np.random.choice(X_train.shape[0], size=n_samples, replace=False)
         latent_grid = X_train[init_indices]
-        # add a small random perturbation to the training data points
-        latent_grid += 0.01 * np.random.randn(*latent_grid.shape).astype(np.float32)
     else:
         raise NotImplementedError(sample_distribution)
 
@@ -263,26 +263,22 @@ def robust_multi_restart_optimizer(
 
         # Fit GMM to the latent grid
         logger.debug(f"Fitting GMM to the latent grid.")
+        gmm_start_time = time.time()
         gmm = GaussianMixture(
             n_components=n_gmm_components,
             covariance_type="diag",
             max_iter=2000,
-            random_state=0, tol=1e-3, verbose=2
+            random_state=0, tol=1e-3, verbose=2,
+            reg_covar=1e-6,
         ).fit(X_train)
-        logger.debug(f"GMM fitted with {n_gmm_components} components. Now scoring the latent grid.")
+        logger.debug(f"GMM fitting with {n_gmm_components} components took {time.time() - gmm_start_time:.2f} seconds. Now scoring the latent grid.")
         logdens_z_grid = gmm.score_samples(latent_grid)
         logger.debug(f"Log-density shape: {logdens_z_grid.shape}")
 
         # Cache precision matrices & log‑normalizers for fast constraint
-        # gmm.precisions_ = np.linalg.inv(gmm.covariances_)                       # (C, D, D)
-        # logdets         = np.linalg.slogdet(gmm.covariances_)[1]                # (C,)
-        # gmm.precisions_ = 1.0 / gmm.covariances_  # (C, D) for diagonal covariance
-        logdets         = np.sum(np.log(gmm.covariances_), axis=1)  # (C,)
-        # prec_chol          = gmm.precisions_cholesky_       # (C, D)  = 1/σ_reg
-        # gmm.precisions_    = prec_chol ** 2                    # 1 / σ_reg²
-        # logdets            = -2.0 * np.sum(np.log(prec_chol), axis=1)   # ln|Σ_reg|
+        logdets = np.sum(np.log(gmm.covariances_), axis=1)
         D = X_train.shape[1]
-        gmm.log_norm_   = -0.5 * (D * np.log(2 * np.pi) + logdets)             # (C,)
+        gmm.log_norm_ = -0.5 * (D * np.log(2 * np.pi) + logdets)
 
         # Log the shape and stats of the log-density
         logger.debug(
@@ -292,7 +288,7 @@ def robust_multi_restart_optimizer(
             f"Percentiles of log-density: {np.percentile(logdens_z_grid, [0, 5, 10, 25, 50, 75, 90, 95, 100])}"
         )
 
-        # Throw away 20% of the points with the lowest log-density
+        # Throw away 10% of the points with the lowest log-density
         opt_constraint_threshold = np.percentile(logdens_z_grid, 10)
 
         # Filter out points that are below the threshold
@@ -310,10 +306,10 @@ def robust_multi_restart_optimizer(
     # Sort the valid points by acquisition function
     if method == "L-BFGS-B" or method == "SLSQP" or method == "trust-constr":
         z_valid_acq, _ = func_with_grad(z_valid)
-        z_valid_prop_argsort = np.argsort(z_valid_acq.reshape(1,-1))[0]  # assuming minimization of property
+        z_valid_prop_argsort = np.argsort(z_valid_acq.reshape(1,-1))[0]
     elif method == "COBYLA":
         z_valid_acq = func_with_grad(z_valid)
-        z_valid_prop_argsort = np.argsort(z_valid_acq.reshape(1,-1))[0]  # assuming minimization of property
+        z_valid_prop_argsort = np.argsort(z_valid_acq.reshape(1,-1))[0]
     else:
         raise NotImplementedError(method)
 
@@ -323,17 +319,6 @@ def robust_multi_restart_optimizer(
 
     z_valid_sorted = z_valid_sorted.astype(np.float64)
     latent_grid_init = latent_grid_init.astype(np.float64)
-    
-    # mask = gmm_constraint(z_valid_sorted, gmm, opt_constraint_threshold) >= 0
-    viol = gmm_constraint(z_valid_sorted, gmm, opt_constraint_threshold)
-    logger.debug(f"Violations: {viol}")
-    mask = viol >= 0
-    z_valid_sorted = z_valid_sorted[mask]
-    latent_grid_init = latent_grid_init[mask]
-    if init_indices is not None:
-        init_indices = init_indices[mask]
-
-    logger.debug(f"z_valid_sorted gmm shape: {z_valid_sorted.shape}")
 
     # -- Optimization loop ---------------------------------------- #
     # Wrapper for functions, that handles array flattening and dtype changing
@@ -369,7 +354,8 @@ def robust_multi_restart_optimizer(
             constraints = None
 
         if method == "L-BFGS-B":
-            logger.info("A combination of 'L-BFGS-B' and GMM-optimization constraints is not possible. Hence, the GMM will not be used during optimization.")
+            if opt_constraint == "GMM" and i == 0:
+                logger.info("A combination of 'L-BFGS-B' and GMM-optimization constraints is not possible. Hence, the GMM will not be used during optimization.")
             res = minimize(
                 fun=objective1d,
                 x0=z_valid_sorted[i],
@@ -438,16 +424,10 @@ def robust_multi_restart_optimizer(
     init_indices = init_indices[indices] if init_indices is not None else None
 
     # Final GMM check: filter out any optimized points below the density threshold
-    if opt_constraint_threshold is not None:
+    if opt_constraint is not None:
         # Compute log-density of each optimized candidate
         logdens_final = gmm.score_samples(x_candidates)
         logger.debug(f"Log-density of optimized candidates: {logdens_final}")
-        # Keep only those above the threshold
-        # mask = logdens_final > opt_constraint_threshold
-        # x_candidates = x_candidates[mask]
-        # opt_vals_candidates = opt_vals_candidates[mask]
-        # latent_grid_init = latent_grid_init[mask]
-        # init_indices = init_indices[mask] if init_indices is not None else None
 
     if feature_selection == "PCA" or feature_selection == "FI":
         # Merge the fixed indices back into the candidates

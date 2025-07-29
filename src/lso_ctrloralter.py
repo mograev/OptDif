@@ -11,6 +11,9 @@ from tqdm.auto import tqdm
 import yaml
 import pickle
 from omegaconf import OmegaConf
+import math
+from functools import reduce
+from itertools import islice
 
 import torch
 from torch import Generator
@@ -21,8 +24,10 @@ import numpy as np
 from torchvision.transforms.functional import pil_to_tensor
 from torchvision import transforms
 from torchvision.utils import save_image
+from accelerate import Accelerator
 
 # My imports
+sys.path.append(os.getcwd()) # Ensure the src directory is in the Python path
 from src.dataloader.ffhq import FFHQDataset
 from src.dataloader.utils import OptEncodeDataset
 from src.dataloader.weighting import DataWeighter
@@ -32,7 +37,7 @@ from src.ctrloralter.annotators.openclip import VisionModel
 from src.ctrloralter.annotators.midas import DepthEstimator
 from src.ctrloralter.annotators.hed import TorchHEDdetector
 from src.ctrloralter.mapper_network import SimpleMapper, FixedStructureMapper15
-from src.ctrloralter.utils import add_lora_from_config
+from src.ctrloralter.utils import add_lora_from_config, save_checkpoint
 from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE
 
 
@@ -79,7 +84,7 @@ def add_opt_args(parser):
     bo_group = parser.add_argument_group("BO")
     bo_group.add_argument("--n_samples", type=int, default=10000, help="Number of samples to draw from sample distribution")
     bo_group.add_argument("--opt_method", type=str, default="SLSQP", choices=["SLSQP", "COBYLA", "L-BFGS-B"], help="Optimization method to use: 'SLSQP', 'COBYLA' 'L-BFGS-B'")
-    bo_group.add_argument("--opt_constraint", type=str, default="GMM", help="Strategy for optimization constraint: only 'GMM' is implemented")
+    bo_group.add_argument("--opt_constraint", type=str, choices=["GMM", "None"], help="Strategy for optimization constraint: only 'GMM' is implemented")
     bo_group.add_argument("--n_gmm_components", type=int, default=None, help="Number of components used for GMM fitting")
     bo_group.add_argument("--sparse_out", type=bool, default=True, help="Whether to filter out duplicate outputs")
 
@@ -115,6 +120,126 @@ def _run_command(command, command_name):
     logger.debug(f"{command_name} done in {time.time() - start_time:.1f}s")
 
 
+def _retrain_lora(sd_model, datamodule, save_dir, version, num_epochs, device):
+    """
+    Finetune LoRA weights together with the mapper / encoder networks of a
+    CTRLorALTer Stable-Diffusion model for a limited number of epochs (or a
+    fraction of one epoch).
+    Args:
+        sd_model: The Stable Diffusion model to retrain.
+        datamodule: The datamodule containing the training data
+        save_dir: Directory to save the retrained model.
+        version: Version string to append to the saved model.
+        num_epochs: Number of epochs to retrain for.
+        device: Device to use for training (e.g., "cuda" or "cpu").
+    """
+
+    # -- Configuration -------------------------------------------- #
+    save_dir = Path(save_dir)
+    run_dir = save_dir / version
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    train_dataloader = datamodule.train_dataloader()
+
+    accelerator = Accelerator(
+        project_dir=str(run_dir),
+        gradient_accumulation_steps=1,
+        mixed_precision="bf16" if device == "cuda" else "no",
+        log_with="tensorboard",
+    )
+    sd_model = sd_model.to(accelerator.device)
+
+    # Init trackers
+    logger.info("init trackers")
+    if accelerator.is_main_process:
+        accelerator.init_trackers("")
+
+    # -- Parameter Groups ----------------------------------------- #
+    mappers_params = list(
+        filter(lambda p: p.requires_grad, reduce(lambda x, y: x + list(y.parameters()), sd_model.mappers, []))
+    )
+    encoder_params = list(
+        filter(lambda p: p.requires_grad, reduce(lambda x, y: x + list(y.parameters()), sd_model.encoders, []))
+    )
+    optim_params    = sd_model.params_to_optimize + mappers_params + encoder_params
+
+    optimizer = torch.optim.AdamW(optim_params, lr=1e-4)
+    prepared = accelerator.prepare(
+        *sd_model.mappers,
+        *sd_model.encoders,
+        sd_model.unet,
+        optimizer,
+        train_dataloader,
+    )
+    mappers = prepared[: len(sd_model.mappers)]
+    encoders = prepared[len(sd_model.mappers) : len(sd_model.mappers) + len(sd_model.encoders)]
+    (unet, optimizer, train_dataloader) = prepared[
+        len(sd_model.mappers) + len(sd_model.encoders) :
+    ]
+    sd_model.mappers = mappers
+    sd_model.encoders = encoders
+    sd_model.unet = unet
+
+    n_loras = len(sd_model.mappers)
+
+    # -- Train Loop ----------------------------------------------- #
+    if num_epochs < 1:
+        max_epochs = 1
+        limit_batches = int(num_epochs * len(train_dataloader))
+    else:
+        max_epochs = int(num_epochs)
+        limit_batches = None
+
+    log_every_n_steps = 10
+    global_step = 0
+    for epoch in range(max_epochs):
+        unet.train()
+        for m in mappers:
+            m.train()
+        for e in encoders:
+            e.train()
+
+        for step, batch in enumerate(train_dataloader):
+            if limit_batches is not None and step >= limit_batches:
+                break
+
+            with accelerator.accumulate(unet, *mappers, *encoders):
+                imgs = batch.to(accelerator.device)
+                cs = [imgs] * n_loras        # same condition for every adapter
+                prompts = [""] * imgs.size(0)
+
+                _, loss, _, _ = sd_model.forward_easy(
+                    imgs,
+                    prompts,
+                    cs,
+                    cfg_mask=sd_model.cfg_mask,
+                    batch=batch,
+                )
+
+                accelerator.backward(loss)
+                optimizer.step()
+                optimizer.zero_grad()
+
+            if step % log_every_n_steps == 0:
+                accelerator.log(
+                    values={
+                        "epoch": epoch,
+                        "train/loss": loss.detach().item(),
+                    },
+                    step=global_step,
+                )
+            
+            if accelerator.sync_gradients:
+                global_step += 1
+
+    accelerator.wait_for_everyone()
+    if accelerator.is_main_process:
+        save_checkpoint(
+            unet_sds=sd_model.get_lora_state_dict(accelerator.unwrap_model(unet)),
+            mapper_network_sd=[accelerator.unwrap_model(m).state_dict() for m in mappers],
+            encoder_sd=None,
+            path=run_dir,
+        )
 
 def _choose_best_rand_points(args, dataset):
     """ Helper function to choose points for training surrogate model """
@@ -225,15 +350,16 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
     logger.debug("Retrieving phi vectors from SD model")
     # Get phi vectors from the SD model
     phi_list = []
-    for batch in temp_dataloader:
-        # Move batch to the correct device
-        batch = batch.to(device)
+    with torch.no_grad():
+        for batch in temp_dataloader:
+            # Move batch to the correct device
+            batch = batch.to(device)
 
-        # Get phi vectors from the SD model
-        phi = sd_model.predict_phi(batch).cpu().numpy()
+            # Get phi vectors from the SD model without tracking gradients
+            phi = sd_model.predict_phi(batch).detach().cpu().numpy()
 
-        # Append to list
-        phi_list.append(phi)
+            # Append to list
+            phi_list.append(phi)
     
     # Concatenate all phi vectors
     latent_points = np.concatenate(phi_list, axis=0)
@@ -342,7 +468,7 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
             f"--sparse_out={args.sparse_out}"
         ]
 
-        if args.opt_constraint is not None:
+        if args.opt_constraint != "None":
             bo_opt_command.append(f"--opt_constraint={args.opt_constraint}")
             bo_opt_command.append(f"--n_gmm_components={args.n_gmm_components}")
 
@@ -413,6 +539,16 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
 
         _run_command(gbo_opt_command, f"GBO opt")
 
+    # Delete data and train results files to save space
+    if os.path.exists(data_file):
+        os.remove(data_file)
+    if args.opt_strategy in ["GP", "DNGO"]:
+        if os.path.exists(curr_bo_file):
+            os.remove(curr_bo_file)
+    elif args.opt_strategy == "GBO":
+        if os.path.exists(curr_gbo_file):
+            os.remove(curr_gbo_file)
+            
     # Load point (and init points if available)
     results = np.load(opt_path, allow_pickle=True)
     z_opt = results["z_opt"]
@@ -484,6 +620,12 @@ def main_loop(args):
 
     # Setup logging
     setup_logger(result_dir / "main.log")
+
+    # Set optimize to true if retraining is enabled
+    if args.n_retrain_epochs > 0 or args.n_init_retrain_epochs > 0:
+        do_optimize = True
+    else:
+        do_optimize = False
     
     # Load pre-trained SD-VAE model
     if args.sd_path == "runwayml/stable-diffusion-v1-5":
@@ -500,7 +642,7 @@ def main_loop(args):
             "lora": {
                 "style": {
                     "enable": "always",
-                    "optimize": False,
+                    "optimize": do_optimize,
                     "ckpt_path": args.style_ckpt_path,
                     "ignore_check": False,
                     "cfg": True,
@@ -522,7 +664,7 @@ def main_loop(args):
         if args.struct_adapter == "depth":
             raw_cfg["lora"]["struct"] = {
                     "enable": "always",
-                    "optimize": False,
+                    "optimize": do_optimize,
                     "ckpt_path": args.struct_ckpt_path,
                     "ignore_check": False,
                     "cfg": False,
@@ -540,7 +682,7 @@ def main_loop(args):
         elif args.struct_adapter == "hed":
             raw_cfg["lora"]["struct"] = {
                     "enable": "always",
-                    "optimize": False,
+                    "optimize": do_optimize,
                     "ckpt_path": args.struct_ckpt_path,
                     "ignore_check": False,
                     "cfg": False,
@@ -571,7 +713,7 @@ def main_loop(args):
             "lora": {
                 "style": {
                     "enable": "always",
-                    "optimize": False,
+                    "optimize": do_optimize,
                     "ckpt_path": args.style_ckpt_path,
                     "cfg": True,
                     "transforms": [],
@@ -600,6 +742,7 @@ def main_loop(args):
         cfg,
         device=args.device,
     )
+    sd_model.cfg_mask = cfg_mask
 
     # Load datamodule
     img_size = 512 if args.sd_path == "runwayml/stable-diffusion-v1-5" else 1024
@@ -660,11 +803,11 @@ def main_loop(args):
                 num_epochs = args.n_init_retrain_epochs
             if num_epochs > 0:
                 retrain_dir = result_dir / "retraining"
-                version = f"retrain_{samples_so_far}"
+                version = f"iter_{samples_so_far}"
                 # default: run through 10% of the weighted training data in retraining epoch
-                # _retrain_vae(
-                #     sd_vae, datamodule, retrain_dir, version, num_epochs, args.device
-                # )
+                _retrain_lora(
+                    sd_model, datamodule, retrain_dir, version, num_epochs, args.device
+                )
 
             # Update progress bar
             postfix["retrain_left"] -= 1

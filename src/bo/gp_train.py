@@ -9,6 +9,8 @@ import functools
 import logging
 import time
 import pickle
+import os
+import sys
 
 import numpy as np
 import torch
@@ -16,10 +18,12 @@ import gpytorch
 from sklearn.cluster import MiniBatchKMeans
 from sklearn.decomposition import PCA
 
+sys.path.append(os.getcwd()) # Ensure the src directory is in the Python path
 from src.metrics.feature_importance import compute_feature_importance_from_data, compute_feature_importance_from_model
-
 from src.bo.gp_model import SparseGPModel
 
+# Add jitter to the Cholesky decomposition
+gpytorch.settings.cholesky_jitter._set_value(1e-4, 1e-4, 1e-4)
 
 # Arguments
 parser = argparse.ArgumentParser()
@@ -60,8 +64,7 @@ def gp_performance_metrics(model, likelihood, X_train, y_train):
     likelihood.eval()
     metrics = {}
 
-    with torch.no_grad():
-
+    with torch.no_grad():        
         # Compute predictive distribution
         preds = likelihood(model(X_train))
         mu = preds.mean

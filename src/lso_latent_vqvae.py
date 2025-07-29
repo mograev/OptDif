@@ -23,12 +23,13 @@ from torchvision.utils import save_image
 from diffusers import AutoencoderKL
 
 # My imports
+sys.path.append(os.getcwd()) # Ensure the src directory is in the Python path
 from src.dataloader.ffhq import FFHQDataset
 from src.dataloader.utils import OptEncodeDataset
 from src.dataloader.weighting import DataWeighter
 from src.classification.smile_classifier import SmileClassifier
 from src.models.latent_models import LatentVQVAE, LatentVQVAE2
-from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE, ENTMOOT_TRAIN_OPT_FILE
+from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO_OPT_FILE
 
 
 # Weighted Retraining arguments
@@ -58,7 +59,7 @@ def add_opt_args(parser):
 
     # Common arguments
     opt_group = parser.add_argument_group("Optimization")
-    opt_group.add_argument("--opt_strategy", type=str, choices=["GBO", "DNGO", "GP", "ENTMOOT"], help="Optimization strategy to use")
+    opt_group.add_argument("--opt_strategy", type=str, choices=["GBO", "DNGO", "GP"], help="Optimization strategy to use")
     opt_group.add_argument("--n_out", type=int, default=5, help="Number of points to return from optimization")
     opt_group.add_argument("--n_starts", type=int, default=20, help="Number of optimization runs with different initial values")
     opt_group.add_argument("--n_rand_points", type=int, default=8000, help="Number of random points to sample for surrogate model training")
@@ -72,7 +73,7 @@ def add_opt_args(parser):
     bo_group = parser.add_argument_group("BO")
     bo_group.add_argument("--n_samples", type=int, default=10000, help="Number of samples to draw from sample distribution")
     bo_group.add_argument("--opt_method", type=str, default="SLSQP", choices=["SLSQP", "COBYLA", "L-BFGS-B", "trust-constr"], help="Optimization method to use: 'SLSQP', 'COBYLA' 'L-BFGS-B'")
-    bo_group.add_argument("--opt_constraint", type=str, default="GMM", help="Strategy for optimization constraint: only 'GMM' is implemented")
+    bo_group.add_argument("--opt_constraint", type=str, choices=["GMM", "None"], help="Strategy for optimization constraint: only 'GMM' is implemented")
     bo_group.add_argument("--n_gmm_components", type=int, default=None, help="Number of components used for GMM fitting")
     bo_group.add_argument("--sparse_out", type=bool, default=True, help="Whether to filter out duplicate outputs")
 
@@ -184,10 +185,7 @@ def _encode_latents(latent_model, dataloader, opt_strategy, device):
             sd_latents = sd_tensor_batch.to(device)
 
             # Encode sd latents into lower dim latent space
-            if opt_strategy == "ENTMOOT":
-                # Get discrete indices for ENTMOOT
-                latents = latent_model.encode(sd_latents)[2]
-            elif isinstance(latent_model, LatentVQVAE2):
+            if isinstance(latent_model, LatentVQVAE2):
                 latents_b, latents_t, _, _ = latent_model.encode(sd_latents)
                 # Store latent shapes in model
                 latent_model.latent_b_shape = latents_b.shape[1:]
@@ -229,10 +227,7 @@ def _decode_and_predict(latent_model, sd_vae, predictor, z, opt_strategy, device
             latents = z[j: j + batch_size].to(device)
 
             # Decode latent vectors to SD latents
-            if opt_strategy == "ENTMOOT":
-                # Decode discrete indices for ENTMOOT
-                sd_lats = latent_model.decode_code(latents)
-            elif isinstance(latent_model, LatentVQVAE2):
+            if isinstance(latent_model, LatentVQVAE2):
                 # Decode latent vectors for LatentVQVAE2
                 latents_b = latents[:, :latent_model.divide_point].view(
                     -1, *latent_model.latent_b_shape
@@ -303,7 +298,7 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
     latent_points = latent_points.reshape(len(latent_points), -1)
 
     # Save points to file
-    if args.opt_strategy in ["GP", "DNGO", "ENTMOOT"]:
+    if args.opt_strategy in ["GP", "DNGO"]:
         targets = -temp_targets.reshape(-1, 1)  # Since it is a minimization problem
     else:
         targets = temp_targets.reshape(-1, 1)
@@ -405,7 +400,7 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
             f"--sparse_out={args.sparse_out}"
         ]
 
-        if args.opt_constraint is not None:
+        if args.opt_constraint != "None":
             bo_opt_command.append(f"--opt_constraint={args.opt_constraint}")
             bo_opt_command.append(f"--n_gmm_components={args.n_gmm_components}")
 
@@ -476,33 +471,15 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
 
         _run_command(gbo_opt_command, f"GBO opt")
 
-    elif args.opt_strategy == "ENTMOOT":
-
-        # Fitting and optimizing surrogate model (in one script)
-       new_entmoot_file = run_folder / f"entmoot_opt_res.npy"
-       log_path = run_folder / f"entmoot_train_opt.log"
-       opt_path = run_folder / f"entmoot_opt_res.npy"
-
-       entmoot_train_opt_command = [
-            "python",
-            ENTMOOT_TRAIN_OPT_FILE,
-            f"--seed={iter_seed}",
-            f"--data_file={str(data_file)}",
-            f"--save_file={str(new_entmoot_file)}",
-            f"--predictor_path={str(args.predictor_path)}",
-            f"--scaled_predictor={str(args.scaled_predictor)}",
-            f"--predictor_attr_file={str(args.predictor_attr_file)}",
-            f"--n_starts={str(args.n_starts)}",
-            f"--n_out={str(num_queries_to_do)}",
-            f"--n_dim={str(latent_model.hparams.ddconfig['embed_dim'])}",
-            f"--n_embed={str(latent_model.hparams.ddconfig['n_embed'])}",
-            f"--logfile={str(log_path)}",
-       ]
-
-       if pbar is not None:
-           pbar.set_description("ENTMOOT training and optimization")
-
-       _run_command(entmoot_train_opt_command, f"ENTMOOT train and opt")
+    # Delete data and train results files to save space
+    if os.path.exists(data_file):
+        os.remove(data_file)
+    if args.opt_strategy in ["GP", "DNGO"]:
+        if os.path.exists(curr_bo_file):
+            os.remove(curr_bo_file)
+    elif args.opt_strategy == "GBO":
+        if os.path.exists(curr_gbo_file):
+            os.remove(curr_gbo_file)
 
     # Load point
     results = np.load(opt_path, allow_pickle=True)

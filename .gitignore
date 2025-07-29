@@ -33,3 +33,4 @@ logs/
 *.cache
 .ipynb_checkpoints
 src/ctrloralter/checkpoints/
+.conda/

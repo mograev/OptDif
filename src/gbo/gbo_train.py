@@ -7,6 +7,8 @@ import argparse
 import pickle
 import time
 from itertools import cycle, islice
+import os
+import sys
 
 import numpy as np
 import torch
@@ -14,6 +16,7 @@ import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader
 from sklearn.decomposition import PCA
 
+sys.path.append(os.getcwd()) # Ensure the src directory is in the Python path
 from src.metrics.feature_importance import compute_feature_importance_from_data, compute_feature_importance_from_model
 from src.gbo.gbo_model import GBOModel
 from src.utils import zero_mean_unit_var_normalization
