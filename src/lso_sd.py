@@ -61,7 +61,7 @@ def add_opt_args(parser):
     opt_group.add_argument("--n_starts", type=int, default=20, help="Number of optimization runs with different initial values")
     opt_group.add_argument("--n_rand_points", type=int, default=8000, help="Number of random points to sample for surrogate model training")
     opt_group.add_argument("--n_best_points", type=int, default=2000, help="Number of best points to sample for surrogate model training")
-    opt_group.add_argument("--sample_distribution", type=str, default="normal", choices=["normal", "uniform", "train_data"], help="Distribution to sample from: 'normal', 'uniform' or 'train_data'")
+    opt_group.add_argument("--sample_distribution", type=str, default="normal", choices=["normal", "train_data"], help="Distribution to sample from: 'normal' or 'train_data'")
     opt_group.add_argument("--feature_selection", type=str, default="None", choices=["PCA", "FI", "None"], help="Feature selection method to use: 'PCA' or 'FI'. If 'None', no feature selection is applied.")
     opt_group.add_argument("--feature_selection_dims", type=int, default=512, help="Number of (PCA or FI) dimensions to use. If feature_selection is None, this is ignored.")
     opt_group.add_argument("--feature_selection_model_path", type=str, default=None, help="Path to the feature selection model. If feature_selection is None, this is ignored.")

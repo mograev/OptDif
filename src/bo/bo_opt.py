@@ -31,18 +31,18 @@ parser = argparse.ArgumentParser()
 opt_group = parser.add_argument_group("BO optimization")
 opt_group.add_argument("--logfile", type=str, help="file to log to", default="dngo_opt.log")
 opt_group.add_argument("--seed", type=int, required=True)
-opt_group.add_argument("--surrogate_type", type=str, default="GP", help="Type of surrogate model: 'GP' or 'DNGO'")
+opt_group.add_argument("--surrogate_type", type=str, choices=["GP", "DNGO"], help="Type of surrogate model: 'GP' or 'DNGO'")
 opt_group.add_argument("--surrogate_file", type=str, required=True, help="path to load pretrained surrogate model from")
 opt_group.add_argument("--data_file", type=str, help="file to load data from", required=True)
 opt_group.add_argument("--save_file", type=str, required=True, help="file to save results to")
 opt_group.add_argument("--n_out", type=int, default=5, help="Number of points to return from optimization")
 opt_group.add_argument("--n_starts", type=int, default=20, help="Number of optimization runs with different initial values")
 opt_group.add_argument("--n_samples", type=int, default=10000, help="Number of samples to draw from sample distribution")
-opt_group.add_argument("--sample_distribution", type=str, default="normal", help="Distribution to sample from: 'normal' or 'uniform'")
+opt_group.add_argument("--sample_distribution", type=str, default="normal", choices=["normal", "train_data"], help="Distribution to sample from: 'normal' or 'train_data'")
 opt_group.add_argument("--opt_constraint", type=str, default=None, help="Strategy for optimization constraint: only 'GMM' is implemented")
 opt_group.add_argument("--n_gmm_components", type=int, default=None, help="Number of components used for GMM fitting")
 opt_group.add_argument("--sparse_out", type=bool, default=True, help="Whether to filter out duplicate outputs")
-opt_group.add_argument("--opt_method", type=str, default="SLSQP", choices=["SLSQP", "COBYLA", "L-BFGS-B", "trust-constr"], help="Optimization method to use")
+opt_group.add_argument("--opt_method", type=str, default="SLSQP", choices=["SLSQP", "L-BFGS-B", "trust-constr"], help="Optimization method to use")
 opt_group.add_argument("--feature_selection", type=str, default=None, choices=["PCA", "FI"], help="Feature selection method to use: 'PCA' or 'FI'. If None, no feature selection is applied.")
 opt_group.add_argument("--feature_selection_dims", type=int, default=512, help="Number of (PCA or FI) dimensions to use. If feature_selection is None, this is ignored.")
 
@@ -166,27 +166,15 @@ def gmm_constraint_jac(x, fitted_gmm, threshold):
 
     return (w[:, None] * grads).sum(0)          # (D,)
 
-def bound_constraint(x, component, bound):
-    """
-    Constraint function for bounding the optimization variables.
-    Args:
-        x (np.ndarray): Input data points.
-        component (int): Index of the component to constrain.
-        bound (float): Bound value.
-    Returns:
-        float: Constraint value.
-    """
-    return bound - np.abs(x[component])
-
 
 # -- Main optimization function ----------------------------------- #
 def robust_multi_restart_optimizer(
     func_with_grad,
     X_train,
     method="SLSQP",
+    opt_bounds=None,
     num_pts_to_return=5,
     num_starts=20,
-    opt_bounds=3.,
     logger=None,
     n_samples=10000,
     sample_distribution="normal",
@@ -202,9 +190,9 @@ def robust_multi_restart_optimizer(
         func_with_grad (callable): Function to optimize.
         X_train (np.ndarray): Training data.
         method (str): Optimization method.
+        opt_bounds (list): Bounds for optimization.
         num_pts_to_return (int): Number of points to return.
         num_starts (int): Number of optimization starts.
-        opt_bounds (float): Optimization bounds.
         return_res (bool): Whether to return optimization results.
         logger (logging.Logger): Logger for debugging.
         n_samples (int): Number of samples to draw from sample distribution.
@@ -222,12 +210,7 @@ def robust_multi_restart_optimizer(
     # -- Prepare latent grid points ------------------------------- #
     logger.debug(f"X_train shape: {X_train.shape}")
 
-    # Sample grid points either from normal or uniform distribution
-    if sample_distribution == "uniform":
-        # Sample uniformly in the range [-opt_bounds, opt_bounds]
-        latent_grid = np.random.uniform(low=-opt_bounds, high=opt_bounds, size=(n_samples, X_train.shape[1]))
-        init_indices = None
-    elif sample_distribution == "normal":
+    if sample_distribution == "normal":
         # Sample from a normal distribution centered around the mean of the training data
         mean, std = X_train.mean(axis=0), X_train.std(axis=0)
         latent_grid = np.random.normal(loc=mean, scale=std, size=(n_samples, X_train.shape[1]))
@@ -248,6 +231,9 @@ def robust_multi_restart_optimizer(
         assert opt_indices is not None, "opt_indices must be provided when feature_selection is 'PCA' or 'FI'"
         latent_grid = latent_grid[:, opt_indices]
         X_train = X_train[:, opt_indices]
+
+        # Align bounds with the selected dimensions
+        opt_bounds = [opt_bounds[i] for i in opt_indices]
 
     # Store latent grid shape
     latent_grid_dim = latent_grid.shape[1]
@@ -304,14 +290,8 @@ def robust_multi_restart_optimizer(
     logger.debug(f"Finished GMM scoring. Now starting optimization.")
     
     # Sort the valid points by acquisition function
-    if method == "L-BFGS-B" or method == "SLSQP" or method == "trust-constr":
-        z_valid_acq, _ = func_with_grad(z_valid)
-        z_valid_prop_argsort = np.argsort(z_valid_acq.reshape(1,-1))[0]
-    elif method == "COBYLA":
-        z_valid_acq = func_with_grad(z_valid)
-        z_valid_prop_argsort = np.argsort(z_valid_acq.reshape(1,-1))[0]
-    else:
-        raise NotImplementedError(method)
+    z_valid_acq, _ = func_with_grad(z_valid)
+    z_valid_prop_argsort = np.argsort(z_valid_acq.reshape(1,-1))[0]
 
     z_valid_sorted = z_valid[z_valid_prop_argsort]
     latent_grid_init = latent_grid_init[z_valid_prop_argsort]
@@ -344,12 +324,6 @@ def robust_multi_restart_optimizer(
                 "jac": gmm_constraint_jac,
                 "args": (gmm, opt_constraint_threshold)
             }]
-        elif method == "COBYLA":
-            constraints = [{
-                "type": "ineq",
-                "fun": bound_constraint,
-                "args": (i, opt_bounds)
-            } for i in range(latent_grid_dim)]
         else:
             constraints = None
 
@@ -361,18 +335,8 @@ def robust_multi_restart_optimizer(
                 x0=z_valid_sorted[i],
                 jac=True,
                 method=method,
-                bounds=[(-opt_bounds, opt_bounds) for _ in range(latent_grid_dim)],
+                bounds=opt_bounds,
                 options={'gtol': 1e-08}
-            )
-
-        elif method == "COBYLA":
-            res = minimize(
-                fun=objective1d,
-                x0=z_valid_sorted[i],
-                jac=True,
-                method=method,
-                constraints=constraints,
-                options={'maxiter': 250}
             )
         
         elif method == "SLSQP":
@@ -381,7 +345,7 @@ def robust_multi_restart_optimizer(
                 x0=z_valid_sorted[i],
                 jac=True,
                 method=method,
-                bounds=[(-opt_bounds, opt_bounds) for _ in range(latent_grid_dim)],
+                bounds=opt_bounds,
                 constraints=constraints,
                 options={'maxiter': 250, 'eps': 1e-5})
                 
@@ -392,7 +356,7 @@ def robust_multi_restart_optimizer(
                 jac=True,
                 hessp=hessp_diag,
                 method=method,
-                bounds=[(-opt_bounds, opt_bounds) for _ in range(latent_grid_dim)],
+                bounds=opt_bounds,
                 constraints=constraints,
                 options={'maxiter': 250, 'gtol': 1e-4, 'xtol': 1e-5, 'barrier_tol': 1e-3, 'initial_tr_radius': 0.1, 'verbose': 3}
             )
@@ -526,49 +490,29 @@ def opt_main(args):
     fmin = np.percentile(y_train, 10)
     logger.info(f"Using fmin={fmin:.2f}")
 
-    # Set optimization bounds
-    opt_bounds = 10 if args.feature_selection == "PCA" else 1.
-    logger.info(f"Using optimization bound of {opt_bounds}")
+    # Set optimization bounds based on training data statistics
+    train_mean = X_train.mean(axis=0)
+    train_std = X_train.std(axis=0)
+    opt_bounds = [(train_mean[i] - train_std[i], train_mean[i] + train_std[i]) for i in range(X_train.shape[1])]
 
     # Run the optimization
     logger.info("\n### Starting optimization ### \n")
-
-    if args.opt_method == "L-BFGS-B" or args.opt_method == "SLSQP" or args.opt_method == "trust-constr":
-        latent_pred, ei_vals, latent_grid_init, init_indices = robust_multi_restart_optimizer(
-            functools.partial(neg_ei_and_grad, surrogate=surrogate, fmin=fmin),
-            X_train,
-            args.opt_method,
-            num_pts_to_return=args.n_out,
-            num_starts=args.n_starts,
-            opt_bounds=opt_bounds,
-            n_samples=args.n_samples,
-            sample_distribution=args.sample_distribution,
-            logger=logger,
-            opt_constraint=args.opt_constraint,
-            n_gmm_components=args.n_gmm_components,
-            sparse_out=args.sparse_out,
-            feature_selection=args.feature_selection,
-            opt_indices=opt_indices if args.feature_selection else None,
-        )
-    elif args.opt_method == "COBYLA":
-        latent_pred, ei_vals, latent_grid_init, init_indices = robust_multi_restart_optimizer(
-            functools.partial(neg_ei, surrogate=surrogate, fmin=fmin),
-            X_train,
-            args.opt_method,
-            num_pts_to_return=args.n_out,
-            num_starts=args.n_starts,
-            opt_bounds=opt_bounds,
-            n_samples=args.n_samples,
-            sample_distribution=args.sample_distribution,
-            logger=logger,
-            opt_constraint=args.opt_constraint,
-            n_gmm_components=args.n_gmm_components,
-            sparse_out=args.sparse_out,
-            feature_selection=args.feature_selection,
-            opt_indices=opt_indices if args.feature_selection else None,
-        )
-    else:
-        raise NotImplementedError(args.opt_method)
+    latent_pred, ei_vals, latent_grid_init, init_indices = robust_multi_restart_optimizer(
+        functools.partial(neg_ei_and_grad, surrogate=surrogate, fmin=fmin),
+        X_train,
+        method=args.opt_method,
+        opt_bounds=opt_bounds,
+        num_pts_to_return=args.n_out,
+        num_starts=args.n_starts,
+        n_samples=args.n_samples,
+        sample_distribution=args.sample_distribution,
+        logger=logger,
+        opt_constraint=args.opt_constraint,
+        n_gmm_components=args.n_gmm_components,
+        sparse_out=args.sparse_out,
+        feature_selection=args.feature_selection,
+        opt_indices=opt_indices if args.feature_selection else None,
+    )
 
     logger.info(f"Done optimization! {len(latent_pred)} results found\n\n.")
 
