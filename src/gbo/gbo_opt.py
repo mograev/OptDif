@@ -130,6 +130,8 @@ def opt_gbo(
 
     # Optional dim reduction through feature selection
     if feature_selection == "PCA" or feature_selection == "FI":
+        # ensure positive-stride Numpy array
+        opt_indices = np.ascontiguousarray(opt_indices)
         logger.debug(f"opt indices: {opt_indices}")
         assert opt_indices is not None, "opt_indices must be provided when feature_selection is 'PCA' or 'FI'"
         latent_grid = latent_grid[:, opt_indices]
