@@ -52,5 +52,5 @@ lossconfig:
         use_actnorm: false
         disc_loss: "hinge_r1"
         pixel_loss: "l1"
-        n_embed: 2048
+        n_embed: 1024
 learning_rate: 1.0e-4
