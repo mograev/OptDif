@@ -487,6 +487,13 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
     z_init = results.get("z_init", None)
     z_indices = results.get("z_indices", None)
 
+    # Check that enough points were found
+    if len(z_opt) < num_queries_to_do:
+        raise ValueError(
+            f"Not enough points found by optimization strategy {args.opt_strategy}. "
+            f"Found {len(z_opt)}, but expected {num_queries_to_do}."
+        )
+
     # Derive original images from initial indices
     # Only applicable if initial points are sampled from the training data
     x_orig = None
@@ -582,7 +589,6 @@ def main_loop(args):
         ddconfig=latent_model_config["ddconfig"],
         lossconfig=latent_model_config["lossconfig"],
         ckpt_path=args.latent_model_ckpt_path,
-        sd_vae_path=args.sd_vae_path,
     )
 
     # Obtain shape of the latent space
@@ -731,7 +737,6 @@ def main_loop(args):
                     img_path = str(Path(curr_samples_dir) / f"img_orig/{i}.png")
                     save_image(x, img_path, normalize=True)
 
-            # Append new points to dataset and adapt weighting
             datamodule.append_train_data(new_filename_list, y_opt)
 
             # Save results

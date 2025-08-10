@@ -403,7 +403,7 @@ def robust_multi_restart_optimizer(
 
     # Optionally filter out duplicate optimization results
     if sparse_out:
-        latent_pred, sparse_indexes = sparse_subset(latent_pred, 0.01)
+        latent_pred, sparse_indexes = sparse_subset(latent_pred, 0.0001)
         opt_vals_candidates = opt_vals_candidates[sparse_indexes]
         latent_grid_init = latent_grid_init[sparse_indexes]
         init_indices = init_indices[sparse_indexes] if init_indices is not None else None

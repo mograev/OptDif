@@ -1,22 +1,23 @@
 #!/bin/bash
 
-#SBATCH --job-name=lso_latent_vqvae_gbo               # Job name
-#SBATCH --output=logs/lso/latent_vqvae_gbo_06_%j.out  # Output log file
-#SBATCH --error=logs/lso/latent_vqvae_gbo_06_%j.err   # Error log file
-#SBATCH --time=4:00:00                                # Maximum runtime (hh:mm:ss)
-#SBATCH --partition=gpu20                             # Partition to submit the job to
-#SBATCH --gres=gpu:1                                  # Request GPU resources
+#SBATCH --job-name=latent_vqvae_gbo                # Job name
+#SBATCH --output=logs/lso/latent_vqvae_gbo_%j.out  # Output log file
+#SBATCH --error=logs/lso/latent_vqvae_gbo_%j.err   # Error log file
+#SBATCH --time=12:00:00                            # Maximum runtime (hh:mm:ss)
+#SBATCH --partition=gpu20                          # Partition to submit the job to
+#SBATCH --gres=gpu:1                               # Request GPU resources
+#SBATCH --cpus-per-task=16                         # Number of CPU cores per task
 
 # Device and seed
 device="cuda"
-seed=42
+seed=42 # 42, 43, 44
 
 # Dataloader
 img_dir="data/ffhq/images1024x1024"
 attr_path="data/ffhq/smile_scores.json"
 max_property_value=2
 min_property_value=0
-batch_size=16
+batch_size=128
 num_workers=8
 val_split=0
 
@@ -24,11 +25,11 @@ val_split=0
 weight_type="uniform"
 
 # Weighted Retraining
-query_budget=50 #500
+query_budget=100
 retraining_frequency=5
-n_retrain_epochs=0.0 #0.1
-n_init_retrain_epochs=0.0 #1
-result_path="results/latent_vqvae_gbo_06/"
+n_retrain_epochs=0
+n_init_retrain_epochs=0
+result_path="results/latent_vqvae_gbo/"
 sd_vae_path="stabilityai/stable-diffusion-3.5-medium"
 latent_model_config_path="models/latent_vqvae/version_8_2/hparams.yaml"
 latent_model_ckpt_path="models/latent_vqvae/version_8_2/checkpoints/last.ckpt"
@@ -41,21 +42,21 @@ n_out=5
 n_starts=20
 n_rand_points=8000
 n_best_points=2000
-sample_distribution="train_data" # "train_data", "uniform", "normal"
+sample_distribution="train_data" # "normal", "train_data"
 
 # Feature Selection
-feature_selection="None" # "FI", "PCA", "None"
-feature_selection_dims=512
-feature_selection_model_path="models/feature_selection/latents_fi_model.pkl"
+feature_selection="None" # "FI", "None"
+feature_selection_dims=128
+feature_selection_model_path="models/feature_selection/fi_latent_vqvae_512.pkl"
 
 # Initialize Conda for the current shell
 eval "$(conda shell.bash hook)"
 
 # Activate the conda environment
-conda activate optdif1
+conda activate optdif2
 
 # Run the Python script with specified arguments
-CUDA_VISIBLE_DEVICES=1 python src/lso_latent_vqvae.py \
+CUDA_VISIBLE_DEVICES=0 python src/lso_latent_vqvae.py \
     --device $device \
     --seed $seed \
     --img_dir $img_dir \
