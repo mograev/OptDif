@@ -42,7 +42,7 @@ from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO
 
 
 # Weighted Retraining arguments
-def add_wr_args(parser): 
+def add_wr_args(parser):
     """ Add arguments for weighted retraining """
 
     wr_group = parser.add_argument_group("Weighted Retraining")
@@ -228,7 +228,7 @@ def _retrain_lora(sd_model, datamodule, save_dir, version, num_epochs, device):
                     },
                     step=global_step,
                 )
-            
+
             if accelerator.sync_gradients:
                 global_step += 1
 
@@ -240,6 +240,16 @@ def _retrain_lora(sd_model, datamodule, save_dir, version, num_epochs, device):
             encoder_sd=None,
             path=run_dir,
         )
+
+    # Shut down workers and accelerator
+    try:
+        it = getattr(train_dataloader, "_iterator", None)
+        if it is not None:
+            it._shutdown_workers()
+    except Exception:
+        pass
+    accelerator.end_training()  # close trackers/loggers
+    del train_dataloader
 
 def _choose_best_rand_points(args, dataset):
     """ Helper function to choose points for training surrogate model """
@@ -310,13 +320,8 @@ def _decode_and_predict(sd_model, predictor, z, device, x_orig=None, cfg_mask=No
     # Concatenate all points and convert to numpy
     z_decode = torch.cat(z_decode, dim=0).to(device)
 
-    # Normalize decoded points
-    img_mean = torch.Tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1).to(device)
-    img_std = torch.Tensor([0.5, 0.5, 0.5]).view(1, 3, 1, 1).to(device)
-    z_decode_normalized = (z_decode - img_mean) / img_std
-
-    # Calculate objective function values and choose which points to keep
-    predictions = predictor(z_decode_normalized, batch_size=1000)
+    # Calculate objective function values
+    predictions = predictor(z_decode, batch_size=1000)
 
     return z_decode.cpu(), predictions
 
@@ -360,7 +365,7 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
 
             # Append to list
             phi_list.append(phi)
-    
+
     # Concatenate all phi vectors
     latent_points = np.concatenate(phi_list, axis=0)
     logger.debug(f"Latent points shape: {latent_points.shape}")
@@ -447,7 +452,7 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
         curr_bo_file = new_bo_file
 
         # -- 2. Optimize surrogate acquisition function ----------- #
-        
+
         opt_path = run_folder / f"bo_opt_res.npz"
         log_path = run_folder / f"bo_opt.log"
 
@@ -533,7 +538,7 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
         if args.feature_selection != "None":
             gbo_opt_command.append(f"--feature_selection={args.feature_selection}")
             gbo_opt_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
-        
+
         if pbar is not None:
             pbar.set_description("gradient-based optimization")
 
@@ -548,7 +553,7 @@ def latent_optimization(args, sd_model, predictor, datamodule, num_queries_to_do
     elif args.opt_strategy == "GBO":
         if os.path.exists(curr_gbo_file):
             os.remove(curr_gbo_file)
-            
+
     # Load point (and init points if available)
     results = np.load(opt_path, allow_pickle=True)
     z_opt = results["z_opt"]
@@ -626,7 +631,7 @@ def main_loop(args):
         do_optimize = True
     else:
         do_optimize = False
-    
+
     # Load pre-trained SD-VAE model
     if args.sd_path == "runwayml/stable-diffusion-v1-5":
         sd_model = SD15(
@@ -729,7 +734,7 @@ def main_loop(args):
                 }
             }
         }
-    
+
     else:
         raise ValueError(f"Unsupported SD path: {args.sd_path}")
 
@@ -879,7 +884,7 @@ def main_loop(args):
                         x = torch.from_numpy(x)
                     img_path = str(Path(curr_samples_dir) / f"img_init/{i}.png")
                     save_image(x, img_path, normalize=True)
-            
+
             # Save original images if available
             if x_orig is not None:
                 os.makedirs(curr_samples_dir / "img_orig")
@@ -916,7 +921,7 @@ if __name__ == "__main__":
     parser = add_opt_args(parser)
     parser = FFHQDataset.add_data_args(parser)
     parser = DataWeighter.add_weight_args(parser)
-    
+
     args = parser.parse_args()
 
     main_loop(args)

@@ -33,7 +33,7 @@ from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO
 
 
 # Weighted Retraining arguments
-def add_wr_args(parser): 
+def add_wr_args(parser):
     """ Add arguments for weighted retraining """
 
     wr_group = parser.add_argument_group("Weighted Retraining")
@@ -129,7 +129,7 @@ def _retrain_vae(vae, datamodule, save_dir, version_str, num_epochs, device):
         limit_train_batches = 1.0
     else:
         raise ValueError(f"invalid num epochs {num_epochs}")
-    
+
     # Enable PyTorch anomaly detection
     with torch.autograd.set_detect_anomaly(True):
         # Create trainer
@@ -179,7 +179,7 @@ def _encode_images(sd_vae, dataloader, device):
 
     # Move VAE to the correct device
     sd_vae = sd_vae.to(device)
-    
+
     with torch.no_grad():
         for image_tensor_batch in dataloader:
             # Move images to the correct device
@@ -187,7 +187,7 @@ def _encode_images(sd_vae, dataloader, device):
 
             # Encode images into latent space
             latents = sd_vae.encode(images).latent_dist.sample()  # Use the sampled latent distribution
-            
+
             # Flatten each latent, such that shape is (B, C*H*W)
             latents = latents.view(latents.shape[0], -1)
 
@@ -225,7 +225,7 @@ def _decode_and_predict(sd_vae, predictor, z, device):
             # Decode SD latents to images
             decoded_images = sd_vae.decode(latents).sample
             decoded_images = decoded_images.cpu()  # Move to CPU for further processing
-            
+
             z_decode.append(decoded_images)
 
     # Free up GPU memory
@@ -355,7 +355,7 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
         curr_bo_file = new_bo_file
 
         # -- 2. Optimize surrogate acquisition function ----------- #
-        
+
         opt_path = run_folder / f"bo_opt_res.npz"
         log_path = run_folder / f"bo_opt.log"
 
@@ -441,7 +441,7 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
         if args.feature_selection != "None":
             gbo_opt_command.append(f"--feature_selection={args.feature_selection}")
             gbo_opt_command.append(f"--feature_selection_dims={args.feature_selection_dims}")
-        
+
         if pbar is not None:
             pbar.set_description("gradient-based optimization")
 
@@ -469,7 +469,7 @@ def latent_optimization(args, sd_vae, predictor, datamodule, num_queries_to_do, 
     if args.sample_distribution == "train_data" and z_indices is not None:
         x_orig = [temp_dataset[int(idx)] for idx in z_indices]
         y_orig = [temp_targets[int(idx)] for idx in z_indices]
-    
+
     # Decode point
     x_opt, y_opt = _decode_and_predict(
         sd_vae,
@@ -523,7 +523,7 @@ def main_loop(args):
 
     # Setup logging
     setup_logger(result_dir / "main.log")
-    
+
     # Load pre-trained SD-VAE model
     if args.sd_vae_path == "stabilityai/stable-diffusion-3.5-medium":
         sd_vae = AutoencoderKL.from_pretrained("stabilityai/stable-diffusion-3.5-medium", subfolder="vae")
@@ -536,7 +536,7 @@ def main_loop(args):
             sd_vae = AutoencoderKL.from_pretrained(args.sd_vae_path)
         except Exception as e:
             logger.error(f"Failed to load SD-VAE from {args.sd_vae_path}: {e}")
-    
+
     # Obtain shape of the latent space
     with torch.no_grad():
         dummy = torch.zeros(1, 3, 256, 256)
@@ -590,7 +590,7 @@ def main_loop(args):
         for ret_idx in range(num_retrain):
             # Log global time
             logger.info(f"Retraining iteration {ret_idx + 1}/{num_retrain} at {time.strftime('%Y-%m-%d %H:%M:%S', time.localtime())}")
-            
+
             # Update progress bar
             pbar.set_postfix(postfix)
             pbar.set_description("retraining")
@@ -681,7 +681,7 @@ def main_loop(args):
                         x = torch.from_numpy(x)
                     img_path = str(Path(curr_samples_dir) / f"img_init/{i}.png")
                     save_image(x, img_path, normalize=True)
-            
+
             # Save original images if available
             if x_orig is not None:
                 os.makedirs(curr_samples_dir / "img_orig")
@@ -718,7 +718,7 @@ if __name__ == "__main__":
     parser = add_opt_args(parser)
     parser = FFHQDataset.add_data_args(parser)
     parser = DataWeighter.add_weight_args(parser)
-    
+
     args = parser.parse_args()
 
     main_loop(args)

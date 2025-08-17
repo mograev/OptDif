@@ -7,6 +7,7 @@ Sources:
 """
 
 import logging
+import warnings
 import math
 
 import torch
@@ -39,6 +40,30 @@ def quadratic_basis_func(x):
 
 
 logger = logging.getLogger(__name__)
+
+
+def _cholesky_with_jitter(A, max_tries=8, initial_jitter=1e-8):
+    """
+    Try Cholesky; on failure, add growing diagonal jitter.
+    Returns (L, used_fallback: bool). If all attempts fail, returns (None, True).
+    """
+    # Ensure exact symmetry to avoid tiny asymmetries
+    A = (A + A.transpose(-1, -2)) * 0.5
+    M = A.shape[-1]
+    I = torch.eye(M, device=A.device, dtype=A.dtype)
+    jitter = initial_jitter
+    for _ in range(max_tries):
+        try:
+            L = torch.linalg.cholesky(A)
+            return L, False
+        except RuntimeError:
+            A = A + jitter * I
+            jitter *= 10.0
+    # one last attempt using cholesky_ex (just in case)
+    L, info = torch.linalg.cholesky_ex(A, check_errors=False)
+    if int(info) == 0:
+        return L, True
+    return None, True
 
 
 class Prior:
@@ -130,6 +155,8 @@ class BayesianLinearRegression:
         """
         # Unpack and convert to linear scale
         log_alpha, log_beta = theta[..., 0], theta[..., 1]
+        log_alpha = torch.clamp(log_alpha, min=-20.0, max=20.0)
+        log_beta = torch.clamp(log_beta, min=-20.0, max=20.0)
         alpha = torch.exp(log_alpha)        # weight prior precision
         beta = torch.exp(log_beta)     # noise precision
 
@@ -141,16 +168,19 @@ class BayesianLinearRegression:
         # Compute posterior covariance of weights
         A = alpha * I_M + beta * (Phi.T @ Phi)  # [M, M]
 
-        # Use Cholesky for stability when possible
-        try:
-            L = torch.linalg.cholesky(A)
+        # First try a jittered Cholesky for numerical stability
+        rhs = (Phi.T @ t).unsqueeze(-1)  # [M, 1]
+        L, used_fallback = _cholesky_with_jitter(A)
+        if L is not None:
+            # Use the jittered Cholesky factorization
             log_det_A = 2 * torch.sum(torch.log(torch.diag(L)))
-            rhs = (Phi.T @ t).unsqueeze(-1)               # [M, 1]
             m = beta * torch.cholesky_solve(rhs, L).squeeze(-1)  # [M]
-        except RuntimeError:
-            # Fallback to pseudo-inverse if Cholesky fails
-            sign, log_det_A = torch.linalg.slogdet(A)
-            m = beta * torch.linalg.solve(A, Phi.T @ t)  # [M]
+        else:
+            # Last resort: symmetric pseudo-inverse + safe slogdet on symmetrized A
+            A_sym = (A + A.transpose(-1, -2)) * 0.5
+            m = beta * (torch.linalg.pinv(A_sym) @ (Phi.T @ t))  # [M]
+            # Use slogdet to handle near-singular gracefully
+            sign, log_det_A = torch.linalg.slogdet(A_sym)
 
         # Compute the marginal log likelihood
         data_fit = 0.5 * beta * torch.sum((t - Phi @ m) ** 2)
@@ -228,8 +258,11 @@ class BayesianLinearRegression:
 
         # Store the final hyperparameters on linear scale
         self.log_alpha, self.log_beta = theta_opt
+        # Prevent extreme under/overflow that can make A nearly singular
+        self.log_alpha = torch.clamp(self.log_alpha, min=-20.0, max=20.0)
+        self.log_beta  = torch.clamp(self.log_beta,  min=-20.0, max=20.0)
         self.alpha = torch.exp(self.log_alpha)
-        self.beta = torch.exp(self.log_beta)
+        self.beta  = torch.exp(self.log_beta)
 
     def predict(self, X_test):
         """
@@ -254,18 +287,28 @@ class BayesianLinearRegression:
         alpha = self.alpha
         beta = self.beta
 
-        M = Phi_train.shape[1]  # Number of basis functions
+        M = Phi_train.shape[1]
         I_M = torch.eye(M, device=self.device, dtype=Phi_train.dtype)
-        A = alpha * I_M + beta * (Phi_train.T @ Phi_train)  # [M, M]
+        A = alpha * I_M + beta * (Phi_train.T @ Phi_train)
 
-        # Cholesky factorization for stability
-        L = torch.linalg.cholesky(A)
-        S = torch.cholesky_inverse(L)                       # posterior covariance [M, M]
-        rhs = (Phi_train.T @ t).unsqueeze(-1)                # [M, 1]
-        m = beta * torch.cholesky_solve(rhs, L).squeeze(-1)  # posterior mean [M]
+        # Try a jittered Cholesky first
+        rhs = (Phi_train.T @ t).unsqueeze(-1)
+        L, used_fallback = _cholesky_with_jitter(A)
+        if L is not None:
+            S = torch.cholesky_inverse(L)
+            m = beta * torch.cholesky_solve(rhs, L).squeeze(-1)
+        else:
+            warnings.warn(
+                "Cholesky failed even after jitter; using pseudo-inverse fallback. "
+                "Predictions may be less accurate."
+            )
+            # Last-resort: symmetric pseudo-inverse
+            A_sym = (A + A.transpose(-1, -2)) * 0.5
+            S = torch.linalg.pinv(A_sym)
+            m = beta * (S @ (Phi_train.T @ t))
 
-        # Predictive mean and variance
-        mu = Phi_test @ m                                   # Predictive mean [N*,]
+        # Predictive mean / variance
+        mu = Phi_test @ m
         var_model = (Phi_test @ S * Phi_test).sum(dim=1)
         var = 1. / beta + var_model
 

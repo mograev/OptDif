@@ -33,7 +33,7 @@ from src import DNGO_TRAIN_FILE, GP_TRAIN_FILE, BO_OPT_FILE, GBO_TRAIN_FILE, GBO
 
 
 # Weighted Retraining arguments
-def add_wr_args(parser): 
+def add_wr_args(parser):
     """ Add arguments for weighted retraining """
 
     wr_group = parser.add_argument_group("Weighted Retraining")
@@ -129,7 +129,7 @@ def _retrain_latent_model(latent_model, datamodule, save_dir, version_str, num_e
         limit_train_batches = 1.0
     else:
         raise ValueError(f"invalid num epochs {num_epochs}")
-    
+
     # Enable PyTorch anomaly detection
     with torch.autograd.set_detect_anomaly(True):
         # Create trainer
@@ -243,7 +243,7 @@ def _decode_and_predict(latent_model, sd_vae, predictor, z, opt_strategy, device
             # Decode SD latents to images
             dec_imgs = sd_vae.decode(sd_lats).sample
             dec_imgs = dec_imgs.cpu()  # Move to CPU for further processing
-            
+
             # Append decoded images and SD latents to the list
             decoded_images.append(dec_imgs)
             sd_latents.append(sd_lats.cpu())
@@ -379,7 +379,7 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
         curr_bo_file = new_bo_file
 
         # -- 2. Optimize surrogate acquisition function ----------- #
-        
+
         opt_path = run_folder / f"bo_opt_res.npz"
         log_path = run_folder / f"bo_opt.log"
 
@@ -487,7 +487,7 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
     z_init = results.get("z_init", None)
     z_indices = results.get("z_indices", None)
 
-    # Check that enough points were found
+    # Check that enough points were found (activate!)
     if len(z_opt) < num_queries_to_do:
         raise ValueError(
             f"Not enough points found by optimization strategy {args.opt_strategy}. "
@@ -540,7 +540,7 @@ def latent_optimization(args, latent_model, sd_vae, predictor, datamodule, num_q
         return (x_opt, y_opt, z_opt, sd_opt, x_init, y_init)
     else:
         return (x_opt, y_opt, z_opt, sd_opt)
-    
+
 
 def main_loop(args):
 
@@ -566,7 +566,7 @@ def main_loop(args):
         sd_vae.eval()
     else:
         raise NotImplementedError(args.sd_vae_path)
-    
+
     # Load datamodule
     datamodule = FFHQDataset(
         args,
@@ -579,7 +579,7 @@ def main_loop(args):
         encoder=sd_vae,
     )
     datamodule.set_encode(True) # encode images directly into SD latents
-    
+
     # Load latent VAE config
     with open(args.latent_model_config_path, "r") as f:
         latent_model_config = yaml.safe_load(f)
@@ -605,7 +605,7 @@ def main_loop(args):
         scaled=args.scaled_predictor,
         device=args.device,
     )
-    
+
     # Set up results tracking
     results = dict(
         opt_point_properties=[], # saves corresponding function evaluations
@@ -694,7 +694,7 @@ def main_loop(args):
             # Create a new directory for the sampled data
             curr_samples_dir = Path(samples_dir) / f"iter_{samples_so_far}"
             curr_samples_dir.mkdir()
-            
+
             # Save the new latent points
             os.makedirs(curr_samples_dir / "latent_opt")
             for i, z in enumerate(z_opt):
@@ -727,7 +727,7 @@ def main_loop(args):
                         x = torch.from_numpy(x)
                     img_path = str(Path(curr_samples_dir) / f"img_init/{i}.png")
                     save_image(x, img_path, normalize=True)
-            
+
             # Save original images if available
             if x_orig is not None:
                 os.makedirs(curr_samples_dir / "img_orig")
@@ -763,7 +763,7 @@ if __name__ == "__main__":
     parser = add_opt_args(parser)
     parser = FFHQDataset.add_data_args(parser)
     parser = DataWeighter.add_weight_args(parser)
-    
+
     args = parser.parse_args()
 
     main_loop(args)
