@@ -55,7 +55,7 @@ feature_selection_model_path="models/feature_selection/sd_latents_pca_model.pkl"
 eval "$(conda shell.bash hook)"
 
 # Activate the conda environment
-conda activate optdif2
+conda activate optdif1
 
 # Run the Python script with specified arguments
 CUDA_VISIBLE_DEVICES=0 python src/lso_sd.py \

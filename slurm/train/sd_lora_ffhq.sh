@@ -1,8 +1,8 @@
 #!/bin/bash
 
 #SBATCH --job-name=train_sd_lora          # Job name
-#SBATCH --output=logs/sd_lora/v7_%j.out   # Output log file
-#SBATCH --error=logs/sd_lora/v7_%j.err    # Error log file
+#SBATCH --output=logs/sd_lora/v8_%j.out   # Output log file
+#SBATCH --error=logs/sd_lora/v8_%j.err    # Error log file
 #SBATCH --time=12:00:00                   # Maximum runtime (hh:mm:ss)
 #SBATCH --partition=gpu24                 # Partition to submit the job to
 #SBATCH --gres=gpu:8                      # Request GPU resources
@@ -18,9 +18,9 @@ num_workers=8
 val_split=0.1
 
 # Model & Training
-model_version=7
+model_version=8
 model_output_dir="models/sd_lora/version_$model_version"
-struct_adapter="depth" # depth, hed, none
+struct_adapter="hed" # depth, hed, none
 max_epochs=100
 device="cuda"
 num_devices=8

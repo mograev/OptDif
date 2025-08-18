@@ -57,7 +57,7 @@ feature_selection_model_path="models/feature_selection/fi_latent_vqvae_512.pkl"
 eval "$(conda shell.bash hook)"
 
 # Activate the conda environment
-conda activate optdif2
+conda activate optdif1
 
 # Run the Python script with specified arguments
 CUDA_VISIBLE_DEVICES=0 python src/lso_latent_vqvae.py \

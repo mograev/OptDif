@@ -4,8 +4,8 @@
 #SBATCH --output=logs/latent_prior/v16_%j.out     # Std‑out log
 #SBATCH --error=logs/latent_prior/v16_%j.err      # Std‑err log
 #SBATCH --time=1-00:00:00                         # Max runtime (d‑hh:mm:ss)
-#SBATCH --cpus-per-task=28
-#SBATCH --mem 128G
+#SBATCH --cpus-per-task=28						  # CPU cores per task
+#SBATCH --mem 128G								  # Memory per node
 #SBATCH --partition=gpu24                         # SLURM partition
 #SBATCH --gres=gpu:h100:4                         # 4 GPUs
 
@@ -26,8 +26,7 @@ latent_model_ckpt_path="models/latent_vqvae2/version_1_2/checkpoints/last.ckpt"
 # latent_model_config_path="models/vqvae2/version_0_3/hparams.yaml"
 # latent_model_ckpt_path="models/vqvae2/version_0_3/checkpoints/last.ckpt"
 
-# Prior setup (shared hyperparameters)
-prior_type="transformer" # "transformer" or "pixelsnail"
+# Prior setup
 prior_out_dir="models/latent_prior/"
 prior_version="16"
 n_heads=12
@@ -36,8 +35,6 @@ weight_decay=5e-3
 max_epochs=100
 device="cuda"
 num_devices=4
-
-# Transformer specific parameters
 d_model=768
 n_layers=12
 
