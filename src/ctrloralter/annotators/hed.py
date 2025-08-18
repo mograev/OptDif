@@ -1,3 +1,12 @@
+"""
+HED edge detector in PyTorch.
+Loads ControlNet HED weights and returns resized edge maps for SD/LoRAdapter pipelines.
+Adapted to download weights using huggingface_hub package.
+Sources:
+- https://github.com/CompVis/LoRAdapter/blob/main/src/annotators/hed.py
+- https://github.com/lllyasviel/ControlNet/blob/main/annotator/hed/__init__.py
+"""
+
 import os
 import torch
 import torch.nn as nn
@@ -5,9 +14,6 @@ import torch.nn.functional as F
 from einops import rearrange
 from torchvision import transforms as T
 from src.ctrloralter.annotators.util import annotator_ckpts_path
-
-# Taken from https://github.com/lllyasviel/ControlNet/blob/main/annotator/hed/__init__.py
-# Thanks
 
 
 class DoubleConvBlock(torch.nn.Module):
@@ -81,8 +87,6 @@ class TorchHEDdetector(nn.Module):
         remote_model_path = "https://huggingface.co/lllyasviel/Annotators/resolve/main/ControlNetHED.pth"
         modelpath = os.path.expanduser(os.path.join(annotator_ckpts_path, "ControlNetHED.pth"))
         if not os.path.exists(modelpath):
-            #from basicsr.utils.download_util import load_file_from_url
-            #load_file_from_url(remote_model_path, model_dir=annotator_ckpts_path)
             from huggingface_hub import hf_hub_download
             hf_hub_download(
                 repo_id="lllyasviel/Annotators",

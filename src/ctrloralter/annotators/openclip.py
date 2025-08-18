@@ -1,9 +1,13 @@
+"""
+OpenCLIP vision encoder wrapper.
+Loads pretrained vision tower and returns normalized image features for conditioning.
+Source: https://github.com/CompVis/LoRAdapter/blob/main/src/annotators/openclip.py
+"""
+
 from torch import nn
 import open_clip
 import torch
-from transformers import (
-    CLIPImageProcessor,
-)
+from transformers import CLIPImageProcessor
 from torchvision.transforms.functional import normalize
 from .util import better_resize
 
@@ -23,7 +27,6 @@ class VisionModel(nn.Module):
         self.clip_vision_model.requires_grad_(False)
         self.clip_vision_model.eval()
 
-    # @torch.no_grad()
     def forward(self, imgs: torch.Tensor) -> torch.Tensor:
         assert imgs.min() >= -1.0
         assert imgs.max() <= 1.0
@@ -38,7 +41,5 @@ class VisionModel(nn.Module):
         )
 
         image_features = self.clip_vision_model.encode_image(imgs)
-
-        # image_features /= image_features.norm(dim=-1, keepdim=True)
 
         return image_features

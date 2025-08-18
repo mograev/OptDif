@@ -1,3 +1,9 @@
+"""
+Utilities for LoRAdapter training.
+DataProvider, recursive getattr, LoRA loading/toggling.
+Source: https://github.com/CompVis/LoRAdapter/blob/main/src/utils.py
+"""
+
 from typing import Any, Literal
 import torch
 from accelerate import Accelerator
@@ -5,8 +11,6 @@ from pathlib import Path
 from torch.nn.utils import clip_grad_norm_
 from functools import reduce
 import os
-
-# from src.model import ModelBase
 
 MODE = Literal[
     "train",

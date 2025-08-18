@@ -1,3 +1,11 @@
+"""
+LoRAdapter-enabled Stable Diffusion models (SD1.5/SDXL).
+Attaches LoRA layers, manages encoders/mappers, training forward & CFG sampling.
+Adapted to allow extraction of globally mapped representations
+and subsequent sampling based directly on these representations.
+Source: https://github.com/CompVis/LoRAdapter/blob/main/src/model.py
+"""
+
 from abc import ABC, abstractmethod
 from typing import Union, Literal
 import torch
@@ -355,7 +363,7 @@ class ModelBase(ABC, nn.Module):
     def sample(self, *args, **kwargs):
         return self.pipe(*args, **kwargs).images
 
-    
+
     def predict_phi(
         self,
         cond: torch.Tensor,
@@ -620,7 +628,7 @@ class SD15(ModelBase):
             if c.shape[0] != batch_size:
                 assert c.shape[0] == 1
                 c = torch.cat(batch_size * [c])  # repeat along batch dim
-            
+
             # Build the unconditioned tensor pair.
             uncond_c = torch.zeros(
                 (c.shape[0], 3, 512, 512),
@@ -633,7 +641,7 @@ class SD15(ModelBase):
             if use_cfg:
                 uncond_enc = encoder(uncond_c)
                 uncond_map = mapper(uncond_enc)
-            
+
             # # Optionally encode and map positive conditioning
             if i in skip_encode_branches:
                 cond_enc = c
@@ -996,7 +1004,7 @@ class SDXL(ModelBase):
             pooled_prompt_embeds=pooled_prompt_embeds,
             **kwargs,
         ).images
-    
+
 
     def sample_custom(
         self,

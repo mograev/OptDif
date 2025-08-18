@@ -1,3 +1,4 @@
+# Script to download pretrained LoRAdapter weights (style/depth/HED/SDXL) from Hugging Face into checkpoints/.
 
 paths=(sd15-depth-128-only-res/struct sd15-hed-128-only-res/struct sd15-style-cross-160-h/style sdxl_b-lora_256/style)
 

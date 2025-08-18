@@ -1,3 +1,9 @@
+"""
+Mapper networks for LoRAdapters.
+Simple vector mapper and fixed structure mappers for SD1.5/SDXL (produce per-stage features/tokens).
+Source: https://github.com/CompVis/LoRAdapter/blob/main/src/mapper_network.py
+"""
+
 from torch import nn
 import torch
 import torch.nn.functional as F

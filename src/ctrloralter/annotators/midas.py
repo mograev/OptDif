@@ -1,12 +1,15 @@
+"""
+MiDaS depth estimator wrapper.
+Loads DPT model and outputs normalized depth maps for SD/LoRAdapter pipelines.
+Source: https://github.com/CompVis/LoRAdapter/blob/main/src/annotators/midas.py
+"""
+
 import torch
 from torch import nn
 from jaxtyping import Float
 from torchvision.transforms.functional import resize
 
-from transformers import (
-    DPTImageProcessor,
-    DPTForDepthEstimation,
-)
+from transformers import DPTForDepthEstimation
 
 from .util import better_resize
 
@@ -25,7 +28,6 @@ class DepthEstimator(nn.Module):
         self.model_size = 384
 
         self.depth_estimator = DPTForDepthEstimation.from_pretrained(model, local_files_only=local_files_only)
-        # self.feature_extractor = DPTImageProcessor.from_pretrained(model, local_files_only=local_files_only)
 
         self.depth_estimator.requires_grad_(False)
         self.depth_estimator.eval()
@@ -41,11 +43,6 @@ class DepthEstimator(nn.Module):
 
         imgs = (imgs + 1.0) / 2.0
         imgs = better_resize(imgs, self.model_size)
-        # depth_dict = self.feature_extractor(imgs, do_rescale=False, return_tensors="pt")
-
-        # for k, v in depth_dict.items():
-        #     if isinstance(v, torch.Tensor):
-        #         depth_dict[k] = v.to(device=imgs.device)
 
         depth_map = self.depth_estimator(pixel_values=imgs).predicted_depth
 

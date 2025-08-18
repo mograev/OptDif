@@ -1,3 +1,9 @@
+"""
+Utility functions for annotaters.
+Checkpoint path setup and robust image resize (crop, pool, bilinear).
+Source: https://github.com/CompVis/LoRAdapter/blob/main/src/annotators/util.py
+"""
+
 import os
 from pathlib import Path
 

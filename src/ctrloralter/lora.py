@@ -1,3 +1,8 @@
+"""
+LoRA conditioning layers.
+Source: https://github.com/CompVis/LoRAdapter/blob/main/src/lora.py
+"""
+
 import torch
 from torch import nn
 from typing import Union, Tuple
