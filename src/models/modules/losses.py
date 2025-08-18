@@ -1,5 +1,7 @@
 """
 Loss functions for various models including VAE and VQ-VAE.
+Based on the implementations from the original Stable Diffusion repository,
+but adapted to latent model training with various model families.
 Sources:
 - https://github.com/CompVis/stable-diffusion/blob/main/ldm/modules/losses/contperceptual.py
 - https://github.com/CompVis/stable-diffusion/blob/main/ldm/modules/losses/vqperceptual.py
@@ -11,7 +13,7 @@ import torch.nn.functional as F
 
 from taming.modules.discriminator.model import NLayerDiscriminator, weights_init
 from taming.modules.losses.lpips import LPIPS
-from taming.modules.losses.vqperceptual import adopt_weight, hinge_d_loss, vanilla_d_loss
+from taming.modules.losses.vqperceptual import hinge_d_loss, vanilla_d_loss
 
 
 def hinge_d_loss_with_r1(logits_real, logits_fake, real_imgs, gamma=5.0):
@@ -45,11 +47,11 @@ def measure_perplexity(predicted_indices, n_classes):
     """
     # Calculate the number of samples in each cluster
     cluster_usage = torch.bincount(predicted_indices.reshape(-1), minlength=n_classes).float()
-    
+
     # Calculate the perplexity
     p = cluster_usage / cluster_usage.sum()
     perplexity = torch.exp(-torch.sum(p * torch.log(p + 1e-10)))
-    
+
     return perplexity, cluster_usage
 
 
@@ -110,7 +112,7 @@ class LPIPSWithDiscriminator(nn.Module):
             use_actnorm=use_actnorm
         ).apply(weights_init)
         self.discriminator_iter_start = disc_start
-        
+
         # Discriminator loss
         if disc_loss == "hinge":
             self.discriminator_loss = hinge_d_loss
@@ -156,7 +158,7 @@ class LPIPSWithDiscriminator(nn.Module):
             # Generator loss
             logits_fake = self.discriminator(img_recons.contiguous())
             gen_loss = -torch.mean(logits_fake)
-            
+
             loss = nll_loss + self.kl_weight * kl_loss + self.disc_weight * disc_active * gen_loss
 
             log = {
@@ -183,7 +185,7 @@ class LPIPSWithDiscriminator(nn.Module):
                 logits_real = self.discriminator(img_inputs.contiguous().detach())
                 logits_fake = self.discriminator(img_recons.contiguous().detach())
                 disc_loss = self.discriminator_loss(logits_real, logits_fake)
-            
+
             loss = disc_active * disc_loss
 
             log = {
@@ -192,7 +194,7 @@ class LPIPSWithDiscriminator(nn.Module):
                 "{}/logits_real".format(split): logits_real.detach().mean(),
                 "{}/logits_fake".format(split): logits_fake.detach().mean()
             }
-        
+
         return loss, log
 
 
@@ -236,7 +238,7 @@ class VAEWithDiscriminator(nn.Module):
             use_actnorm=use_actnorm
         ).apply(weights_init)
         self.discriminator_iter_start = disc_start
-        
+
         # Discriminator loss
         if disc_loss == "hinge":
             self.disc_loss = hinge_d_loss
@@ -301,7 +303,6 @@ class VAEWithDiscriminator(nn.Module):
         return loss, log
 
 
-
 class SimpleVAELoss(nn.Module):
     """
     Simple VAE loss combining reconstruction loss and KL divergence.
@@ -314,7 +315,7 @@ class SimpleVAELoss(nn.Module):
         """
         super().__init__()
         self.beta = beta
-        
+
     def forward(self, inputs, recons, posterior, split="train"):
         """
         Compute the VAE loss.
@@ -326,13 +327,13 @@ class SimpleVAELoss(nn.Module):
         """
         # Reconstruction loss (MSE)
         rec_loss = torch.nn.functional.mse_loss(recons, inputs)
-        
+
         # KL divergence
         kl_loss = posterior.kl().mean()
-        
+
         # Total loss
         total_loss = rec_loss + self.beta * kl_loss
-        
+
         return total_loss, {
             "{}/rec_loss".format(split): rec_loss.detach(),
             "{}/kl_loss".format(split): kl_loss.detach(),
@@ -349,7 +350,7 @@ class VQLPIPSWithDiscriminator(nn.Module):
                  disc_weight=1.0,
                  disc_num_layers=3,
                  disc_in_channels=3,
-                 use_actnorm=False, 
+                 use_actnorm=False,
                  disc_loss="hinge",
                  pixel_loss="l1",
                  n_embed=None,
@@ -405,7 +406,7 @@ class VQLPIPSWithDiscriminator(nn.Module):
         elif disc_loss == "hinge_r1":
             # Use R1 regularization
             self.discriminator_loss = hinge_d_loss_with_r1
-            
+
         # Number of classes for clustering
         # This is used for perplexity calculation
         self.n_classes = n_embed
@@ -459,7 +460,7 @@ class VQLPIPSWithDiscriminator(nn.Module):
                 "{}/nll_loss".format(split): nll_loss.detach(),
                 "{}/gen_loss".format(split): gen_loss.detach(),
             }
-            
+
             # Add perplexity to the log
             if predicted_indices is not None:
                 assert self.n_classes is not None
@@ -519,7 +520,7 @@ class SimpleVQVAELoss(nn.Module):
             "{}/vq_loss".format(split): vq_loss.detach(),
         }
 
-    
+
 class AutoencoderLPIPSWithDiscriminator(nn.Module):
     """
     Reconstruction + LPIPS + Discriminator loss for linear autoencoder.
@@ -558,7 +559,7 @@ class AutoencoderLPIPSWithDiscriminator(nn.Module):
         self.rec_img_weight = rec_img_weight
         self.rec_lat_weight = rec_lat_weight
         self.perceptual_weight = perceptual_weight
-        
+
         # Reconstruction loss
         if pixel_loss == "l1":
             self.pixel_loss = torch.nn.L1Loss(reduction="mean")
@@ -576,7 +577,7 @@ class AutoencoderLPIPSWithDiscriminator(nn.Module):
             use_actnorm=use_actnorm
         ).apply(weights_init)
         self.discriminator_iter_start = disc_start
-        
+
         # Discriminator loss
         if disc_loss == "hinge":
             self.discriminator_loss = hinge_d_loss
@@ -655,12 +656,12 @@ class AutoencoderLPIPSWithDiscriminator(nn.Module):
             }
 
         return loss, log
-    
+
 
 class SimpleAutoencoderLoss(nn.Module):
     """
     Simple Autoencoder loss using reconstruction loss.
-    """        
+    """
     def forward(self, inputs, reconstructions, split="train"):
         """
         Compute the VAE loss.
@@ -671,10 +672,10 @@ class SimpleAutoencoderLoss(nn.Module):
         """
         # Reconstruction loss (MSE)
         rec_loss = torch.nn.functional.mse_loss(reconstructions, inputs)
-        
+
         # Total loss
         total_loss = rec_loss
-        
+
         return total_loss, {
             "{}/rec_loss".format(split): rec_loss.detach(),
         }
@@ -766,7 +767,6 @@ class SDVAELoss(nn.Module):
 
         # Perceptual loss
         self.perceptual_loss = LPIPS().eval()
-        
 
     def forward(self, inputs, recons, latents, split="train"):
         """

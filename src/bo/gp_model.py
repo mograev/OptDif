@@ -2,7 +2,7 @@
 Sparse Gaussian Process Model for Bayesian Optimization.
 This model is based on the GPyTorch library and mirrors the functionality
 of the gpflow SGPR model, which can be found at
-https://gpflow.github.io/GPflow/develop/api/gpflow/models/sgpr/https://gpflow.github.io/GPflow/develop/api/gpflow/models/sgpr/
+https://gpflow.github.io/GPflow/develop/api/gpflow/models/sgpr/
 """
 
 from gpytorch.models import ApproximateGP
@@ -59,7 +59,7 @@ class SparseGPModel(ApproximateGP):
             Tensor: Inducing points.
         """
         return self.variational_strategy.inducing_points.detach()
-    
+
     def predict(self, x):
         """
         Convenience method to predict the mean and variance of the posterior distribution-

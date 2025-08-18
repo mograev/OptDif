@@ -1,10 +1,6 @@
 """
 Deep Networks for Global Optimization. This module performs bayesian linear regression with basis function
 extracted from a feed forward neural network.
-Reference: [1] J. Snoek, O. Rippel, K. Swersky, R. Kiros, N. Satish,
-            N. Sundaram, M.~M.~A. Patwary, Prabhat, R.~P. Adams
-            Scalable Bayesian Optimization Using Deep Neural Networks
-            Proc. of ICML'15
 This implementation is a purely PyTorch based rewrite of the following code sources:
 - https://github.com/janschwedhelm/master-thesis/blob/main/src/dngo/dngo.py
 - https://github.com/janschwedhelm/master-thesis/blob/main/src/dngo/base_model.py
@@ -63,7 +59,7 @@ class Net(nn.Module):
         x = torch.tanh(self.fc2(x))
         x = torch.tanh(self.fc3(x))
         return x
-    
+
 
 class DNGO:
     """
@@ -218,7 +214,7 @@ class DNGO:
             var *= self.y_std ** 2
 
         return mu, var
-    
+
     def get_incumbent(self):
         """
         Get the best observed point and its function value.
@@ -235,5 +231,5 @@ class DNGO:
 
         x_best = X_tr[best_idx]
         y_best = y_tr[best_idx].item()
-        
+
         return x_best, y_best

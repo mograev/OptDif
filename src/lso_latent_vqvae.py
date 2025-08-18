@@ -1,4 +1,6 @@
-""" Run weighted retraining for FFHQ with the VAE of the Stable Diffusion model and a LatentVAE """
+"""
+Run LSO for FFHQ with a LatentVQVAE learned in the Stable Diffusion latent space.
+"""
 
 import argparse
 from pathlib import Path

@@ -1,3 +1,8 @@
+"""
+FFHQ trainer for latent models (AE, VAE, VQ-VAE, VQ-VAE-2, Linear) on SD latents.
+Lightning, DDP spawn, FID/Spectral fit, TensorBoard & checkpoints.
+"""
+
 import yaml
 import argparse
 import logging

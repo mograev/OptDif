@@ -1,8 +1,8 @@
 """
 Data weighting methods based on properties of the data.
-Sources: 
-    https://github.com/janschwedhelm/master-thesis/blob/main/src/utils.py
-    https://github.com/dhbrookes/CbAS/blob/master/src/optimization_algs.py
+Sources:
+- https://github.com/janschwedhelm/master-thesis/blob/main/src/utils.py
+- https://github.com/dhbrookes/CbAS/blob/master/src/optimization_algs.py
 """
 
 import argparse

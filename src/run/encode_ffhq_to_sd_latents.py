@@ -14,14 +14,14 @@ from diffusers import AutoencoderKL
 
 # Configuration
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-input_dir = "/BS/robust-architectures/work/OptDif/data/ffhq/images1024x1024"
+input_dir = "data/ffhq/images1024x1024"
 output_dir = "data/ffhq/sd_latents"
 os.makedirs(output_dir, exist_ok=True)
 
 print(f"Working on device: {device}")
 
 # Load the file names to process
-img_paths = glob.glob("/BS/robust-architectures/work/OptDif/data/ffhq/images1024x1024/*.png")
+img_paths = glob.glob(f"{input_dir}/*.png")
 img_paths.sort()
 
 # Create a DataLoader
@@ -61,7 +61,7 @@ with torch.no_grad():
 
         # Encode images into latent space (using mean of the latent distribution)
         latents = sd_vae.encode(images).latent_dist.mean
-        
+
         # Save latents to disk
         for latent in latents:
             z_encode.append(latent.cpu())

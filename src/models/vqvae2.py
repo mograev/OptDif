@@ -1,7 +1,11 @@
+"""
+Two-level VQ-VAE-2 in image space with top/bottom codebooks,
+optional GAN+LPIPS loss, FID/Spectral eval, and Lightning training.
+"""
+
 import torch
 import torch.nn as nn
 import pytorch_lightning as pl
-from torch.nn import functional as F
 import torch.distributed as dist
 from torchvision.utils import make_grid
 
@@ -150,9 +154,9 @@ class VQVAE2(pl.LightningModule):
                 'state_dict': self.state_dict(),
                 'config': self.hparams
             }
-        
+
         torch.save(checkpoint, path)
-        print(f"Model saved to {path}") 
+        print(f"Model saved to {path}")
 
     def encode(self, x):
         """
@@ -373,11 +377,11 @@ class VQVAE2(pl.LightningModule):
             return [opt_g, opt_d]
         else:
             return torch.optim.Adam(self.parameters(), lr=self.hparams.learning_rate)
-        
+
     def get_input(self, batch):
         """Get the input tensor from the batch and ensure its correct dtype."""
         return batch.to(memory_format=torch.contiguous_format).float()
-    
+
     def on_train_start(self):
         """Grab a fixed mini-batch of images for logging."""
         if self.global_rank == 0:
@@ -409,13 +413,13 @@ class VQVAE2(pl.LightningModule):
             self._val_recons_img = []
 
         return super().on_validation_epoch_start()
-    
+
     def on_validation_epoch_end(self):
         """Log validation metrics and calculate FID/Spectral scores if applicable."""
         # Skip logging if sanity checking
         if self.trainer.sanity_checking:
             return super().on_validation_epoch_end()
-        
+
         # -- Validation loss -------------------------------------- #
         if self.global_rank == 0:
             print(f"Epoch {self.current_epoch}:")
@@ -434,7 +438,7 @@ class VQVAE2(pl.LightningModule):
 
         # -- FID & Spectral score --------------------------------- #
         if self.global_rank == 0:
-            
+
             if self.track_fid:
                 # Compute FID score on the reconstructed images
                 fid_score = self.fid_instance.compute_score_from_data(recon_img, eps=1E-6)

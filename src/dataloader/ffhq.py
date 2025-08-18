@@ -1,16 +1,17 @@
 """
-Weighted DataModule for the FFHQ dataset
+Data module for the FFHQ dataset.
+Allows restricting to a specific subset of the dataset based on attributes.
+Weighted sampling is supported.
 """
 
 import json
 
 import torch
 from torch.utils.data import DataLoader, WeightedRandomSampler
-from torchvision import transforms
 import pytorch_lightning as pl
 import numpy as np
 
-from src.dataloader.utils import MultiModeDataset, OptEncodeDataset
+from src.dataloader.utils import OptEncodeDataset
 
 
 class FFHQDataset(pl.LightningDataModule):
@@ -35,7 +36,7 @@ class FFHQDataset(pl.LightningDataModule):
         self.attr_path = args.attr_path
         self.max_property_value = args.max_property_value
         self.min_property_value = args.min_property_value
-        
+
         # DataLoader configuration
         self.batch_size = args.batch_size
         self.num_workers = args.num_workers
@@ -85,14 +86,14 @@ class FFHQDataset(pl.LightningDataModule):
         # Load the attribute JSON file
         with open(self.attr_path, 'r') as f:
             attr_dict = json.load(f)
-            
+
         # Fill dataset with sorted filenames and attribute data
         dataset = []
         for key in sorted(attr_dict.keys()):
             filename = key.split('.')[0]
             if attr_dict[key] >= self.min_property_value and attr_dict[key] < self.max_property_value:
                 dataset.append([filename, attr_dict[key]])
-        
+
         # Convert dataset to numpy array
         dataset_as_numpy = np.array(dataset)
 
@@ -110,7 +111,7 @@ class FFHQDataset(pl.LightningDataModule):
             self.attr_train = dataset_as_numpy[:split_idx, 1].astype(np.float32)
             self.data_val = dataset_as_numpy[split_idx:, 0].tolist()
             self.attr_val = dataset_as_numpy[split_idx:, 1].astype(np.float32)
-            
+
         # Create tensor datasets
         self.train_dataset = OptEncodeDataset(
             filename_list=self.data_train,
@@ -159,9 +160,9 @@ class FFHQDataset(pl.LightningDataModule):
         # Update the encoder setting
         self.train_dataset.set_encode(do_encode)
         self.val_dataset.set_encode(do_encode)
-        
+
         return self
-    
+
     def append_train_data(self, data, labels):
         """
         Append data to the training dataset.

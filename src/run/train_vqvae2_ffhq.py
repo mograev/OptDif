@@ -1,3 +1,8 @@
+"""
+FFHQ trainer for VQ-VAE-2.
+Lightning, DDP spawn, FID/Spectral fit, TensorBoard & checkpoints.
+"""
+
 import yaml
 import argparse
 import logging

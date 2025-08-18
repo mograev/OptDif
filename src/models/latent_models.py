@@ -1,3 +1,8 @@
+"""
+Latent-space models (AE, VAE, VQ-VAE, VQ-VAE-2, Linear) for Stable Diffusion latents
+with Lightning training, optional GAN/LPIPS losses, and FID/Spectral eval.
+"""
+
 import torch
 import os
 from torch import nn
@@ -5,7 +10,6 @@ import torch.distributed as dist
 import pytorch_lightning as pl
 from torchvision.utils import make_grid
 
-# Import Stable Diffusion VAE decoder for pixel-space losses
 from diffusers import AutoencoderKL
 
 from src.models.modules.autoencoder import Encoder, Decoder
@@ -25,7 +29,7 @@ class LatentModel(pl.LightningModule, ABC):
             self,
             ddconfig,
             lossconfig,
-            learning_rate=1e-4, 
+            learning_rate=1e-4,
             sd_vae_path=None,
             fid_instance=None,
             spectral_instance=None
@@ -58,7 +62,7 @@ class LatentModel(pl.LightningModule, ABC):
             self.sd_vae = None
 
         # Manual optimization if Discriminator is used in loss function
-        if isinstance(self.loss, (LPIPSWithDiscriminator, VAEWithDiscriminator, 
+        if isinstance(self.loss, (LPIPSWithDiscriminator, VAEWithDiscriminator,
                                   VQLPIPSWithDiscriminator, AutoencoderLPIPSWithDiscriminator)):
             self.automatic_optimization = False
         else:
@@ -117,7 +121,7 @@ class LatentModel(pl.LightningModule, ABC):
                 'state_dict': self.state_dict(),
                 'config': self.hparams
             }
-        
+
         torch.save(checkpoint, path)
         print(f"Model saved to {path}")
 
@@ -194,7 +198,7 @@ class LatentModel(pl.LightningModule, ABC):
     def configure_optimizers(self):
         """Configures the optimizer for the model."""
         return torch.optim.Adam(self.parameters(), lr=self.learning_rate)
-    
+
     @abstractmethod
     def training_step(self, batch, batch_idx):
         """Training step for the model."""
@@ -242,13 +246,13 @@ class LatentModel(pl.LightningModule, ABC):
             self._val_recons_img = []
 
         return super().on_validation_epoch_start()
-    
+
     def on_validation_epoch_end(self):
         """Log validation metrics and calculate FID/Spectral scores if applicable."""
         # Skip logging if sanity checking
         if self.trainer.sanity_checking:
             return super().on_validation_epoch_end()
-        
+
         # -- Validation loss -------------------------------------- #
         if self.global_rank == 0:
             print(f"Epoch {self.current_epoch}:")
@@ -267,7 +271,7 @@ class LatentModel(pl.LightningModule, ABC):
 
         # -- FID & Spectral score --------------------------------- #
         if self.global_rank == 0:
-            
+
             if self.track_fid:
                 # Compute FID score on the reconstructed images
                 fid_score = self.fid_instance.compute_score_from_data(recon_img, eps=1E-6)
@@ -332,7 +336,7 @@ class LatentVAE(LatentModel):
             fid_instance=fid_instance,
             spectral_instance=spectral_instance,
         )
-        
+
         # Ensure it is a VAE
         assert ddconfig["double_z"]
 
@@ -355,7 +359,7 @@ class LatentVAE(LatentModel):
             torch.nn.Flatten(),  # Flatten spatial dimensions to 1D
             torch.nn.Linear(2*z_channels * spatial_size, 2*embed_dim)  # Project to flat latent dim (2* for mean/logvar)
         )
-        
+
         # Create custom layers for reshaping from 1D latent back to spatial
         self.post_quant_conv = torch.nn.Sequential(
             torch.nn.Linear(embed_dim, z_channels * spatial_size),  # Project from flat latent to spatial
@@ -381,7 +385,7 @@ class LatentVAE(LatentModel):
         moments = self.quant_conv(h)
         posterior = DiagonalGaussianDistribution(moments)
         return posterior
-    
+
     def decode(self, z):
         """
         Decode a latent tensor to a higher dimension.
@@ -393,7 +397,7 @@ class LatentVAE(LatentModel):
         z = self.post_quant_conv(z)
         dec = self.decoder(z)
         return dec
-    
+
     def forward(self, input, sample_posterior=True, return_only_recon=False):
         """
         Encode and decode a latent tensor.
@@ -415,7 +419,7 @@ class LatentVAE(LatentModel):
             return dec
         else:
             return dec, posterior
-    
+
     def training_step(self, batch, batch_idx):
         """
         Training step for the latent VAE.
@@ -494,7 +498,7 @@ class LatentVAE(LatentModel):
             )
 
             opt_g.zero_grad()
-            self.manual_backward(loss_g)  
+            self.manual_backward(loss_g)
             opt_g.step()
 
             # Discriminator update (optimizer_idx = 1)
@@ -513,7 +517,7 @@ class LatentVAE(LatentModel):
             # Summarize losses
             log_dict = {**log_g, **log_d}
             total_loss = loss_g + loss_d
-            
+
         elif isinstance(self.loss, SimpleVAELoss):
             # -- 2C. Simple VAE loss ------------------------------ #
 
@@ -524,13 +528,13 @@ class LatentVAE(LatentModel):
                 posterior=posterior,
                 split="train"
             )
-        
+
         # -- 3. Logging ------------------------------------------- #
         self.log_dict(log_dict, prog_bar=False, on_step=True, on_epoch=False, sync_dist=True)
         self.log("train/total_loss", total_loss, prog_bar=False, on_step=True, on_epoch=True, sync_dist=True)
 
-        return total_loss    
-    
+        return total_loss
+
     def validation_step(self, batch, batch_idx):
         """
         Validation step for the latent VAE.
@@ -558,7 +562,7 @@ class LatentVAE(LatentModel):
 
         if isinstance(self.loss, LPIPSWithDiscriminator):
             # -- 2A. LPIPS with Discriminator loss ---------------- #
-            
+
             # Generator / VAE loss (optimizer_idx = 0)
             loss_g, log_g = self.loss(
                 inputs, recons,
@@ -609,7 +613,7 @@ class LatentVAE(LatentModel):
             # Summarize losses
             log_dict = {**log_g, **log_d}
             total_loss = loss_g + loss_d
-            
+
         elif isinstance(self.loss, SimpleVAELoss):
             # -- 2C. Simple VAE loss ------------------------------ #
 
@@ -647,14 +651,14 @@ class LatentVAE(LatentModel):
             # First optimizer (generator / VAE)
             opt_g= torch.optim.Adam(
                 g_params,
-                lr=lr_g, 
+                lr=lr_g,
                 betas=(0.5, 0.999)
             )
 
             # Second optimizer (discriminator)
             opt_d = torch.optim.Adam(
                 d_params,
-                lr=lr_d, 
+                lr=lr_d,
                 betas=(0.0, 0.999)
             )
 
@@ -664,7 +668,7 @@ class LatentVAE(LatentModel):
         elif isinstance(self.loss, SimpleVAELoss):
             # Use a single optimizer for VAE
             return torch.optim.Adam(
-                self.parameters(), 
+                self.parameters(),
                 lr=self.learning_rate
             )
 
@@ -742,7 +746,7 @@ class LatentVQVAE(LatentModel):
         """
         # Encode to sd latents if not already in that space
         x = self.get_input(x)
-        
+
         h = self.encoder(x)
         h = self.quant_conv(h)
         quant, emb_loss, (_,_,ind) = self.quantize(h)
@@ -787,7 +791,7 @@ class LatentVQVAE(LatentModel):
         quant_b = self.quantize.get_codebook_entry(code_b, shape=(code_b.shape[0], *self.latent_dim))
         dec = self.decode(quant_b)
         return dec
-    
+
     def forward(self, input, return_pred_indices=False, return_only_recon=False):
         """
         Encode and decode a latent tensor.
@@ -913,7 +917,7 @@ class LatentVQVAE(LatentModel):
 
         if isinstance(self.loss, VQLPIPSWithDiscriminator):
             # -- 2A. LPIPS with Discriminator loss ---------------- #
-            
+
             # Generator / VAE loss (optimizer_idx = 0)
             loss_g, log_g = self.loss(
                 inputs, recons,
@@ -976,24 +980,24 @@ class LatentVQVAE(LatentModel):
             # First optimizer (generator / VAE)
             opt_g = torch.optim.Adam(
                 g_params,
-                lr=lr_g, 
+                lr=lr_g,
                 betas=(0.5, 0.999)
             )
 
             # Second optimizer (discriminator)
             opt_d = torch.optim.Adam(
                 d_params,
-                lr=lr_d, 
+                lr=lr_d,
                 betas=(0.0, 0.999)
             )
 
             # Return both optimizers
             return [opt_g, opt_d]
-        
+
         elif isinstance(self.loss, SimpleVQVAELoss):
             # Use a single optimizer for VQ-VAE
             return torch.optim.Adam(
-                self.parameters(), 
+                self.parameters(),
                 lr=self.learning_rate
             )
 
@@ -1130,7 +1134,7 @@ class LatentVQVAE2(LatentModel):
         d_t = self.decoder_top(self.post_quant_conv_top(q_t))
         x   = self.decoder_bottom(self.post_quant_conv_bottom(q_b) + d_t)
         return x
-    
+
     def decode_code(self, code_b, code_t):
         """
         Decode a tensor of indices to a higher dimensional representation.
@@ -1146,7 +1150,7 @@ class LatentVQVAE2(LatentModel):
         if code_t.dim() == 1:
             # If code_t is a single vector, reshape it to (1, embed_dim)
             code_t = code_t.unsqueeze(0)
-        
+
         quant_b = self.quantize_bottom.get_codebook_entry(code_b, shape=(code_b.shape[0], *self.latent_dim_bottom))
         quant_t = self.quantize_top.get_codebook_entry(code_t, shape=(code_t.shape[0], *self.latent_dim_top))
         dec = self.decode(quant_b, quant_t)
@@ -1392,7 +1396,7 @@ class LatentAE(LatentModel):
         """
         # Encode to sd latents if not already in that space
         x = self.get_input(x)
-        
+
         h = self.encoder(x)
         z = self.quant_conv(h)
         return z
@@ -1495,7 +1499,7 @@ class LatentAE(LatentModel):
         self.log_dict(log_dict, prog_bar=False, on_step=True, on_epoch=False, sync_dist=True)
         self.log("train/total_loss", total_loss, prog_bar=False, on_step=True, on_epoch=True, sync_dist=True)
         return total_loss
-    
+
     def validation_step(self, batch, batch_idx):
         """
         Validation step for the latent autoencoder.
@@ -1581,24 +1585,24 @@ class LatentAE(LatentModel):
             # First optimizer (generator / VAE)
             opt_g = torch.optim.Adam(
                 g_params,
-                lr=lr_g, 
+                lr=lr_g,
                 betas=(0.5, 0.999)
             )
 
             # Second optimizer (discriminator)
             opt_d = torch.optim.Adam(
                 d_params,
-                lr=lr_d, 
+                lr=lr_d,
                 betas=(0.0, 0.999)
             )
 
             # Return both optimizers
             return [opt_g, opt_d]
-        
+
         elif isinstance(self.loss, SimpleAutoencoderLoss):
             # Use a single optimizer for Autoencoder
             return torch.optim.Adam(
-                self.parameters(), 
+                self.parameters(),
                 lr=self.learning_rate
             )
 
@@ -1659,7 +1663,7 @@ class LatentLinearAE(LatentModel):
         """
         # Encode to sd latents if not already in that space
         x = self.get_input(x)
-        
+
         return self.encoder(self._flatten(x))
 
     def decode(self, z):
@@ -1863,23 +1867,23 @@ class LatentLinearAE(LatentModel):
             # First optimizer (generator / VAE)
             opt_g = torch.optim.Adam(
                 g_params,
-                lr=lr_g, 
+                lr=lr_g,
                 betas=(0.5, 0.999)
             )
 
             # Second optimizer (discriminator)
             opt_d = torch.optim.Adam(
                 d_params,
-                lr=lr_d, 
+                lr=lr_d,
                 betas=(0.0, 0.999)
             )
 
             # Return both optimizers
             return [opt_g, opt_d]
-        
+
         elif isinstance(self.loss, LPIPSMSELoss):
             # Use a single optimizer for Autoencoder
             return torch.optim.Adam(
-                self.parameters(), 
+                self.parameters(),
                 lr=self.learning_rate
             )

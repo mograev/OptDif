@@ -1,3 +1,8 @@
+"""
+ImageNet trainer for latent SD models (AE, VAE, VQ-VAE, Linear AE).
+Lightning DDP, FID/Spectral fit, TensorBoard & checkpoints.
+"""
+
 import os
 import yaml
 import argparse

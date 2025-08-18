@@ -1,7 +1,6 @@
 """
 The Spectral metric compares the radial power-spectrum statistics of two image
 distributions via L1, following the style of metrics/fid.py.
-
 Source (adapted from): https://github.com/steffen-jung/SpectralGAN/blob/main/SpectralLoss.py
 """
 
@@ -12,9 +11,9 @@ import numpy as np
 ################################################################
 class SpectralScore:
     """Spectral Score Calculator"""
-    
+
     f_cached_stats_real = "spectral.stats_real.{}.cache"
-    
+
     ############################################################
     def __init__(self, img_size, device="cpu", batch_size=32, num_workers=4):
         """
@@ -65,7 +64,7 @@ class SpectralScore:
             self.is_fitted = True
         else:
             self.is_fitted = False
-    
+
     ############################################################
     def fit(self, data, eps=1e-8):
         """
@@ -117,7 +116,7 @@ class SpectralScore:
 
         mu = np.mean(pred_arr, axis=0)
         return mu
-    
+
     ############################################################
     def fit_real(self, data_real, eps=1e-8):
         """
@@ -138,7 +137,7 @@ class SpectralScore:
             self.f_cached_stats_real.format(self.img_size)
         )
         self.is_fitted = True
-    
+
     ############################################################
     def compute_score_from_data(self, data_fake, eps=1e-8):
         """
@@ -151,7 +150,7 @@ class SpectralScore:
         """
         mu_fake = self.fit(data_fake, eps=eps)
         return self.compute_score(mu_fake)
-    
+
     ############################################################
     def compute_score(self, mu_fake):
         """
@@ -164,7 +163,7 @@ class SpectralScore:
         mu_real = self.get_real_stats()
         # Compute the L1 distance between the real and fake statistics
         return float(np.abs(mu_real - mu_fake).sum())
-    
+
     ############################################################
     def get_real_stats(self):
         """

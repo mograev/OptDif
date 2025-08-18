@@ -1,4 +1,6 @@
-""" Run LSO for FFHQ using the CTRLorALTer adapter in the Stable Diffusion model"""
+"""
+Run LSO for FFHQ using the CTRLorALTer adapter in the Stable Diffusion model.
+"""
 
 import argparse
 from pathlib import Path

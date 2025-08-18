@@ -1,9 +1,12 @@
+"""
+Data module for the ImageNet dataset.
+"""
+
 import os
 
 import torch
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader
 from torchvision import transforms
-from torchvision.datasets import ImageFolder
 import pytorch_lightning as pl
 
 from src.dataloader.utils import ImageFolderToLatentDataset

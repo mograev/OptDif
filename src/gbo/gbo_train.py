@@ -108,7 +108,7 @@ def train_gbo(
 
         # Transform the training data using PCA
         X_train = pca.transform(X_train)
-        
+
         # Reduce to feature_selection_dims components
         if feature_selection_dims < X_train.shape[1]:
             logger.info(f"Reducing to {feature_selection_dims} PCA components")
@@ -242,10 +242,10 @@ def train_gbo(
     del model
     if device == "cuda":
         torch.cuda.empty_cache()
-    
+
 
 if __name__ == "__main__":
-    
+
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)

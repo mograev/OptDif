@@ -1,6 +1,5 @@
 """
 FID Score calculation for real images and generated or reconstructed images.
-
 Source: https://github.com/steffen-jung/SpectralGAN/blob/main/FID/FIDScore.py
 """
 
@@ -13,9 +12,9 @@ from scipy import linalg
 ################################################################
 class FIDScore:
     """FID Score Calculator"""
-    
+
     f_cached_stats_real = "inception.stats_real.{}.cache"
-    
+
     ############################################################
     def __init__(self, img_size, device="cpu", batch_size=32, num_workers=4):
         """
@@ -39,7 +38,7 @@ class FIDScore:
 
         self.model.eval()
         self.model.to(device)
-        
+
         if os.path.isfile(FIDScore.f_cached_stats_real.format(img_size)):
             print(f"Loading cached stats for FID: {FIDScore.f_cached_stats_real.format(img_size)}")
             self.mu_real, self.sigma_real = torch.load(
@@ -50,7 +49,7 @@ class FIDScore:
             self.is_fitted = True
         else:
             self.is_fitted = False
-    
+
     ############################################################
     def fit(self, data):
         """
@@ -61,7 +60,7 @@ class FIDScore:
             mu (numpy.ndarray): The mean of the features.
             sigma (numpy.ndarray): The covariance of the features.
         """
-            
+
         data_size = len(data)
         dims = 2048
 
@@ -76,17 +75,17 @@ class FIDScore:
         # Initialize an array to store the predictions, shaped (data_size, dims)
         pred_arr = np.empty((data_size, dims))
         i_arr = 0
-        
+
         for batch in dataloader:
             # Move batch to device
             batch = batch.to(self.device)
-            
+
             # Get predictions from the model
             pred = self.model(batch)[0].cpu().numpy()
-            
+
             # Get the number of predictions in the batch
             pred_len = pred.shape[0]
-            
+
             # Store predictions in the array
             pred_arr[i_arr:i_arr+pred_len, :] = pred[:, :, 0, 0]
             i_arr += pred_len
@@ -94,9 +93,9 @@ class FIDScore:
         # Compute mean and covariance of the predictions
         mu = np.mean(pred_arr, axis=0)
         sigma = np.cov(pred_arr, rowvar=False)
-        
+
         return mu, sigma
-    
+
     ############################################################
     def fit_real(self, data_real):
         """
@@ -135,7 +134,7 @@ class FIDScore:
             self.is_fitted = True
         else:
             raise FileNotFoundError(f"Real stats file not found: {stats_file}")
-        
+
     def save_real_stats(self, stats_file):
         """
         Save the real statistics to a file.
@@ -150,7 +149,7 @@ class FIDScore:
             )
         else:
             raise RuntimeError("Real stats not computed yet. Call fit_real() first.")
-        
+
     ############################################################
     def compute_score_from_data(self, data_fake, eps=1E-6):
         """
@@ -163,7 +162,7 @@ class FIDScore:
         """
         mu_fake, sigma_fake = self.fit(data_fake)
         return self.compute_score(mu_fake, sigma_fake, eps)
-        
+
     ############################################################
     def compute_score(self, mu2, sigma2, eps=1E-6):
         """
@@ -178,7 +177,7 @@ class FIDScore:
         mu1, sigma1 = self.get_real_stats()
 
         diff = mu1 - mu2
-    
+
         # Product might be almost singular
         covmean, _ = linalg.sqrtm(sigma1.dot(sigma2), disp=False)
         if not np.isfinite(covmean).all():
@@ -187,21 +186,21 @@ class FIDScore:
             print(msg)
             offset = np.eye(sigma1.shape[0]) * eps
             covmean = linalg.sqrtm((sigma1 + offset).dot(sigma2 + offset))
-    
+
         # Numerical error might give slight imaginary component
         if np.iscomplexobj(covmean):
             if not np.allclose(np.diagonal(covmean).imag, 0, atol=1E-3):
                 m = np.max(np.abs(covmean.imag))
                 raise ValueError('Imaginary component {}'.format(m))
             covmean = covmean.real
-    
+
         tr_covmean = np.trace(covmean)
-    
+
         return ( diff.dot(diff) +
                  np.trace(sigma1) +
                  np.trace(sigma2) -
                  2 * tr_covmean )
-    
+
     ############################################################
     def get_real_stats(self):
         """

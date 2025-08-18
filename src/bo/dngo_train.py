@@ -1,5 +1,7 @@
 """
 Training DNGO model.
+This script is extended to deal with feature selection.
+Source: https://github.com/janschwedhelm/master-thesis/blob/main/src/dngo/dngo_train.py
 """
 
 import logging
@@ -94,7 +96,7 @@ def dngo_train(
 
         # Transform the training data using PCA
         X_train = pca.transform(X_train)
-        
+
         # Reduce to feature_selection_dims components
         if feature_selection_dims < X_train.shape[1]:
             logger.info(f"Reducing to {feature_selection_dims} PCA components")

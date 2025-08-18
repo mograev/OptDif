@@ -1,4 +1,8 @@
-import numpy as np
+"""
+Gradient-based feature importance using MLPs.
+Train small networks and compute mean input gradients.
+"""
+
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset

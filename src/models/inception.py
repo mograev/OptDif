@@ -1,3 +1,8 @@
+"""
+InceptionV3 feature extractor for FID.
+Source: https://github.com/janschwedhelm/master-thesis/blob/main/src/fid/inception.py
+"""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F

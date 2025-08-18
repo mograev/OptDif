@@ -1,5 +1,9 @@
+"""
+PyTorch Lightning VAE trainer using SD-VAE Loss
+with optional FID/Spectral validation and reconstruction grid logging.
+"""
+
 import torch
-import torch.nn.functional as F
 import pytorch_lightning as pl
 import torch.distributed as dist
 from torchvision.utils import make_grid
@@ -55,7 +59,7 @@ class LitVAE(pl.LightningModule):
         # 3. Decode
         recon = self.model.decode(z).sample
         return recon, latents
-    
+
     def training_step(self, batch, batch_idx):
         # Forward pass
         inputs = batch
@@ -73,7 +77,7 @@ class LitVAE(pl.LightningModule):
         self.log_dict(log_dict, on_step=True, on_epoch=False, sync_dist=True)
 
         return loss
-    
+
     def validation_step(self, batch, batch_idx):
         # Forward pass
         inputs = batch
@@ -98,7 +102,7 @@ class LitVAE(pl.LightningModule):
 
     def configure_optimizers(self):
         return torch.optim.AdamW(self.parameters(), lr=self.learning_rate)
-    
+
     def on_before_optimizer_step(self, optimizer):
         # ensure DDP buckets see contiguous grads
         for p in self.parameters():
@@ -143,7 +147,7 @@ class LitVAE(pl.LightningModule):
         # Skip logging if sanity checking
         if self.trainer.sanity_checking:
             return super().on_validation_epoch_end()
-        
+
         # -- Validation loss -------------------------------------- #
         if self.global_rank == 0:
             print(f"Epoch {self.current_epoch}:")
@@ -162,7 +166,7 @@ class LitVAE(pl.LightningModule):
 
         # -- FID & Spectral score --------------------------------- #
         if self.global_rank == 0:
-            
+
             if self.track_fid:
                 # Compute FID score on the reconstructed images
                 fid_score = self.fid_instance.compute_score_from_data(recon_img, eps=1E-6)

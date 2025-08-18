@@ -121,7 +121,6 @@ class ARTransformer(nn.Module):
         return seq
 
 
-
 class GridTransformer(nn.Module):
     """
     GPT-style causal Transformer that leverages 2D grid positional embeddings.
@@ -272,7 +271,7 @@ class HierarchicalTransformerPrior(pl.LightningModule):
         self.top_vocab = self.vqvae.quantize_top.n_e
         self.bot_vocab = self.vqvae.quantize_bottom.n_e
         self.bottom_offset = self.top_vocab  # shift bottom indices by this
-        
+
         top_res = self.vqvae.latent_dim_top[0]
         bot_res = self.vqvae.latent_dim_bottom[0]
 
@@ -421,7 +420,7 @@ class HierarchicalTransformerPrior(pl.LightningModule):
         logs["train/bottom_frozen"] = float(self.global_step < self.freeze_bottom_steps)
         self.log_dict(logs, on_step=True, on_epoch=False, sync_dist=True)
         return loss
-    
+
     def on_train_start(self) -> None:
         # Freeze bottom prior parameters until the scheduled number of steps has passed
         for p in self.bot_prior.parameters():
@@ -438,7 +437,7 @@ class HierarchicalTransformerPrior(pl.LightningModule):
         logs = {f"val/{k}": v for k, v in logs.items()}
         self.log_dict(logs, on_step=False, on_epoch=True, sync_dist=True)
         return loss
-    
+
     def setup(self, stage=None):
         if stage == "fit":
             self.total_steps = self.trainer.estimated_stepping_batches

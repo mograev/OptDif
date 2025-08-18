@@ -1,3 +1,7 @@
+"""
+Run CelebA-smile classifier on FFHQ images to produce smile scores JSON.
+"""
+
 import os
 import json
 from tqdm import tqdm
@@ -10,15 +14,15 @@ from PIL import Image
 from src.classification.smile_classifier import SmileClassifier
 
 # -- Configuration ------------------------------------------------ #
-CLASSIFIER_PATH = "models/classifier/celeba_smile/predictor_128_scaled3.pth.tar" # "models/classifier/celeba_smile/predictor_128.pth.tar" # or scaled: "models/classifier/celeba_smile/predictor_128_scaled3.pth.tar"
+CLASSIFIER_PATH = "models/classifier/celeba_smile/predictor_128.pth.tar" # or scaled: "models/classifier/celeba_smile/predictor_128_scaled3.pth.tar"
 ATTR_FILE = "models/classifier/celeba_smile/attributes.json"
-IMAGE_PATH = "/BS/databases/CelebA/img_align_celeba/" # "data/ffhq/images1024x1024/" # 
-OUTPUT_FILE = "data/celeba/smile_scores_scaled.json" # or scaled: "data/ffhq/smile_scores_scaled.json"
+IMAGE_PATH = "data/ffhq/images1024x1024/"
+OUTPUT_FILE = "data/ffhq/smile_scores.json" # or scaled: "data/ffhq/smile_scores_scaled.json"
 BATCH_SIZE = 128
 
 # -- Load classifier ---------------------------------------------- #
 device = "cuda" if torch.cuda.is_available() else "cpu"
-smile_classifier = SmileClassifier(CLASSIFIER_PATH, ATTR_FILE, scaled=True, device=device) # Change to True for scaled classifier
+smile_classifier = SmileClassifier(CLASSIFIER_PATH, ATTR_FILE, scaled=False, device=device) # Change to True for scaled classifier
 
 # -- Load images -------------------------------------------------- #
 

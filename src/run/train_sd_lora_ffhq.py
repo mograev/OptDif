@@ -1,3 +1,9 @@
+"""
+Training script for Stable Diffusion LoRAdapter.
+Original LoRAdapter training script adapted to this setup.
+Source: https://github.com/CompVis/LoRAdapter/blob/main/train.py
+"""
+
 import argparse
 from omegaconf import OmegaConf
 from functools import reduce
@@ -91,7 +97,7 @@ if __name__ == "__main__":
     if accelerator.is_main_process:
         accelerator.init_trackers("")
 
-    
+
     # -- Initialize FID and Spectral metric ----------------------- #
 
     if accelerator.is_main_process:
@@ -129,7 +135,6 @@ if __name__ == "__main__":
             "style": {
                 "enable": "always",
                 "optimize": True,
-                # "ckpt_path": "/BS/optdif/work/models/sd_lora/version_2/checkpoints/epoch_036", # start with already fine-tuned style LoRA
                 "ckpt_path": "ctrloralter/checkpoints/sd15-style-cross-160-h",
                 "ignore_check": False,
                 "cfg": True,
@@ -207,8 +212,7 @@ if __name__ == "__main__":
     lr_scheduler = get_scheduler("cosine", optimizer=optimizer, num_warmup_steps=0, num_training_steps=args.max_epochs * len(train_dataloader))
 
     # Grab a fixed validation batch for logging
-    # val_batch = next(iter(val_dataloader))
-    eval_batch = torch.load("/BS/optdif/work/data/ffhq/eval_batch/size_512.pt")
+    eval_batch = torch.load("data/ffhq/eval/batch_512.pt")
 
     # Prepare network
     logger.info("prepare network")
@@ -252,7 +256,7 @@ if __name__ == "__main__":
                 prompts = [""] * batch.size(0)
 
                 # cfg mask to always true such that the model always learns dropout
-                model_pred, loss, x0, _ = model.forward_easy(
+                _, loss, _, _ = model.forward_easy(
                     imgs,
                     prompts,
                     cs,
@@ -265,7 +269,7 @@ if __name__ == "__main__":
                 optimizer.step()
                 lr_scheduler.step()
                 optimizer.zero_grad()
- 
+
             if step % log_every_n_steps == 0:
                 accelerator.log(
                     values={
@@ -275,7 +279,7 @@ if __name__ == "__main__":
                     },
                     step=global_step
                 )
-            
+
             # after every gradient update step
             if accelerator.sync_gradients:
                 global_step += 1
@@ -342,7 +346,7 @@ if __name__ == "__main__":
                 # Compute FID
                 fid_score = fid_instance.compute_score_from_data(val_recons_imgs)
                 logger.info(f"FID Score: {fid_score:.4f}")
-                
+
                 # Compute Spectral score
                 spectral_score = spectral_instance.compute_score_from_data(val_recons_imgs)
                 logger.info(f"Spectral Score: {spectral_score:.4f}")
@@ -367,7 +371,7 @@ if __name__ == "__main__":
                 generator=Generator(device="cuda").manual_seed(42),
                 cfg_mask=cfg_mask,
             )
-            
+
             # Log sampled images
             if accelerator.is_main_process:
                 log_cond = np.asarray(imgs.cpu())
@@ -385,11 +389,11 @@ if __name__ == "__main__":
                 pred  = torch.from_numpy(log_pred).permute(0,3,1,2)
                 panel = torch.cat([cond, pred], dim=0)
                 grid  = vutils.make_grid(panel, nrow=eval_batch.size(0), value_range=(0,1))
-            
+
                 for tracker in accelerator.trackers:
                     if tracker.name == "tensorboard":
                         tracker.writer.add_image("reconstructions", grid, global_step)
-        
+
         # -- Save checkpoint -------------------------------------- #
         if accelerator.is_main_process and epoch > -1:
             logger.info("Saving checkpoint")
