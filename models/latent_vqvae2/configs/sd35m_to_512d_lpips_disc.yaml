@@ -1,37 +1,37 @@
 ddconfig:
-  # Bottom level  (identical to old VQVAE)
+  # Bottom level (32 -> 16 -> 8)
   bottom:
     double_z: false
-    z_channels: 8           # C  (latent depth)
-    resolution: 32          # H×W of *input* latents
+    z_channels: 8
+    resolution: 32
     in_channels: 16
     out_ch: 16
     ch: 64
-    ch_mult: [1, 2, 2]      # 32 -> 16 -> 8
+    ch_mult: [1, 2, 2]
     num_res_blocks: 2
     attn_resolutions: []
     dropout: 0.0
     attn_type: "none"
     n_embed: 2048
-    embed_dim: 64           # 8x8 grid
+    embed_dim: 64
     remap: null
     sane_index_shape: true
 
-  # Top level  (operates on 8x8 features, downsamples once -> 4x4)
+  # Top level (8 -> 4)
   top:
     double_z: false
-    z_channels: 8           # keep depth the same for simplicity
-    resolution: 8           # this must match bottom bottleneck (H_b = 8)
-    in_channels: 8          # = bottom.z_channels
+    z_channels: 8
+    resolution: 8
+    in_channels: 8
     out_ch: 8
     ch: 64
-    ch_mult: [1, 2]         # 8 -> 4
+    ch_mult: [1, 2]
     num_res_blocks: 2
     attn_resolutions: []
     dropout: 0.0
     attn_type: "none"
-    n_embed: 1024           # usually smaller than bottom
-    embed_dim: 16           # 4x4 grid
+    n_embed: 1024
+    embed_dim: 16
     remap: null
     sane_index_shape: true
 

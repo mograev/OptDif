@@ -23,5 +23,5 @@ lossconfig:
         disc_num_layers: 3
         disc_in_channels: 3
         use_actnorm: false
-        disc_loss: "hinge_r1" # hinge or hinge_r1
+        disc_loss: "hinge_r1"
 learning_rate: 4.5e-6
